@@ -498,6 +498,12 @@ std::unique_ptr<VoiceSession> VoiceSession::create(const SessionConfig & cfg,
     // Force the audio encoder onto Metal — common_params leaves this on the
     // default (CPU) and the audio mmproj is the dominant prefix cost.
     mparams.use_gpu       = true;
+    // Audio only. The Gemma 4 mmproj carries both towers, and the vision half
+    // is ~215 MiB of weights plus its own ~101 MiB Metal compute buffer plus a
+    // 768x768 warmup pass at startup — none of which this app can ever reach,
+    // since the only thing it ever feeds mtmd is microphone PCM.
+    mparams.load_vision   = false;
+    mparams.load_audio    = true;
     mparams.print_timings = false;
     mparams.n_threads     = s->params.cpuparams.n_threads;
     mparams.warmup        = s->params.warmup;
