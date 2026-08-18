@@ -1,0 +1,29 @@
+# Build outputs
+build/
+build-*/
+cmake-build-*/
+
+# Editor/IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# macOS
+.DS_Store
+
+# Models — large binaries we don't track
+models/*.gguf
+models/*.bin
+
+# Voices — same reason
+voices/*.gguf
+voices/*.bin
+
+# Vendored dependency checkouts — each is its own git repo, cloned by hand.
+# NOT submodules (unlike vendor/localvqe, which is tracked in .gitmodules).
+# Together they are ~2 GB, so keep them out of `git add -A`.
+#   vendor/CrispASR   — https://github.com/CrispStrobe/CrispASR
+#   vendor/llama.cpp  — https://github.com/tbtlr/llama.cpp @ mtmd-audio-streaming
+vendor/CrispASR/
+vendor/llama.cpp/
