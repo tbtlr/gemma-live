@@ -73,6 +73,18 @@ static int detect_perf_cores() {
 // ────────────────────────────────────────────────────────────────────────
 static void silent_log(ggml_log_level /*level*/, const char * /*text*/, void * /*ud*/) {}
 
+// Errors only. The default verbosity wants a usable console, and the loaders
+// are anything but: a single startup emits ~1420 lines of per-tensor debug
+// from clip alone, plus hparams dumps, warmup traces, KV-cache layer-sharing
+// notes and "control-looking token" warnings that are normal for this model.
+// None of it is actionable, and all of it buries the lines that are.
+// Verbosity 2 restores the lot.
+static void errors_only_log(ggml_log_level level, const char * text, void * /*ud*/) {
+    if (level == GGML_LOG_LEVEL_ERROR) {
+        fputs(text, stderr);
+    }
+}
+
 // ────────────────────────────────────────────────────────────────────────
 // RMS loudness normaliser for the TTS audio path.
 // VibeVoice's per-chunk amplitude drifts noticeably over a long reply;
@@ -399,12 +411,17 @@ std::unique_ptr<VoiceSession> VoiceSession::create(const SessionConfig & cfg,
     // and verbosity 0 would still print llama's load/warn output.
     common_init();
 
-    // Silence ggml/llama/mtmd noise BEFORE any model load if requested.
-    if (cfg.verbosity == 0) {
-        common_log_set_verbosity_thold(0);
-        llama_log_set(silent_log, nullptr);
-        ggml_log_set (silent_log, nullptr);
-        mtmd_log_set (silent_log, nullptr);
+    // Quieten the loaders BEFORE anything loads. Three sinks, all of which
+    // default to firing everything at stderr:
+    //   verbosity 0 — nothing at all
+    //   verbosity 1 — errors only (the default; see errors_only_log)
+    //   verbosity 2 — untouched, full ggml/llama/clip diagnostics
+    if (cfg.verbosity < 2) {
+        const auto sink = (cfg.verbosity == 0) ? silent_log : errors_only_log;
+        common_log_set_verbosity_thold(cfg.verbosity == 0 ? -1 : 0);
+        llama_log_set(sink, nullptr);
+        ggml_log_set (sink, nullptr);
+        mtmd_log_set (sink, nullptr);
     }
     ggml_backend_load_all();
 
@@ -470,7 +487,7 @@ std::unique_ptr<VoiceSession> VoiceSession::create(const SessionConfig & cfg,
             s->spec_on    = true;
             s->spec_n_max = std::max(common_speculative_n_max(&s->params.speculative), 1);
             if (cfg.verbosity >= 1) {
-                fprintf(stderr, "mtp: enabled (%s, drafting up to %d tok/step)\n",
+                fprintf(stderr, "mtp      %s, draft %d tok/step\n",
                         cfg.mtp_model_path.c_str(), s->spec_n_max);
             }
         } else {
@@ -480,7 +497,7 @@ std::unique_ptr<VoiceSession> VoiceSession::create(const SessionConfig & cfg,
             s->params.speculative.types.clear();
             s->params.speculative.draft.ctx_tgt = nullptr;
             s->params.speculative.draft.ctx_dft = nullptr;
-            fprintf(stderr, "mtp: failed to load %s — falling back to one token per decode\n",
+            fprintf(stderr, "mtp      DISABLED — %s failed to load\n",
                     cfg.mtp_model_path.c_str());
         }
     }
@@ -557,11 +574,11 @@ std::unique_ptr<VoiceSession> VoiceSession::create(const SessionConfig & cfg,
         if (s->dfn_model_ptr) {
             s->tts_output_rate = dfn_model_sample_rate(s->dfn_model_ptr);
             if (cfg.verbosity >= 1) {
-                fprintf(stderr, "dfn: enabled (%s, output @ %d Hz)\n",
+                fprintf(stderr, "dfn      %s @ %d Hz\n",
                         cfg.dfn_model_path.c_str(), s->tts_output_rate);
             }
         } else {
-            fprintf(stderr, "dfn: failed to load %s — disabling post-filter\n",
+            fprintf(stderr, "dfn      DISABLED — %s failed to load\n",
                     cfg.dfn_model_path.c_str());
             s->tts_output_rate = GL_TTS_RATE;
         }

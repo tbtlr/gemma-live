@@ -771,6 +771,7 @@ struct cli_keyword_detector {
     }
 
     static std::string normalise(const std::string & s) { return transcript::normalise(s); }
+    static size_t n_loaded;   // phrases read from file; 0 = using built-ins
     static std::vector<std::string> load_phrases(const char * path,
                                                  const char * const * builtins,
                                                  size_t n_builtins,
@@ -787,13 +788,11 @@ struct cli_keyword_detector {
                     std::string norm = normalise(line);
                     if (norm.size() > 2) out.push_back(std::move(norm));
                 }
-                fprintf(stderr, "keywords[%s]: loaded %zu phrase%s from %s\n",
-                        label, out.size(), out.size() == 1 ? "" : "s", path);
+                n_loaded = out.size();
                 if (!out.empty()) return out;
-                fprintf(stderr, "keywords[%s]: file %s had no usable phrases — using built-ins\n",
-                        label, path);
+                fprintf(stderr, "wake     %s had no usable phrases — using built-ins\n", path);
             } else {
-                fprintf(stderr, "keywords[%s]: %s not found — using built-ins\n", label, path);
+                fprintf(stderr, "wake     %s not found — using built-ins\n", path);
             }
         }
         for (size_t i = 0; i < n_builtins; i++) {
@@ -948,6 +947,7 @@ static std::atomic<bool>  g_mic_probe    {true};
 
 static cli_eou_vad  g_eou_vad;
 
+size_t cli_keyword_detector::n_loaded = 0;
 static cli_keyword_detector g_kwd;
 
 static cli_voice_vad        g_voice_vad;
@@ -1156,10 +1156,10 @@ int main(int argc, char ** argv) {
         if (f) {
             std::stringstream ss; ss << f.rdbuf();
             system_prompt = ss.str();
-            fprintf(stderr, "system prompt: %zu chars from %s\n",
-                    system_prompt.size(), prompt_path.c_str());
+            fprintf(stderr, "prompt   %s (%zu chars)\n",
+                    prompt_path.c_str(), system_prompt.size());
         } else {
-            fprintf(stderr, "system prompt: none (%s not found)\n", prompt_path.c_str());
+            fprintf(stderr, "prompt   none (%s not found)\n", prompt_path.c_str());
         }
     }
 
@@ -1217,17 +1217,19 @@ int main(int argc, char ** argv) {
     // without DFN it stays at GL_TTS_RATE (24000). Everything downstream —
     // speaker, AEC render, stats — must use this value, not the constant.
     const int tts_rate = session->tts_sample_rate();
-    fprintf(stderr, "tts: %s + %s\n", tts_model_path.c_str(), tts_voice_path.c_str());
-    fprintf(stderr, "tts knobs: cfg=%.2f, steps=%d, neg_anchor=%.2f, rate=%d Hz%s\n",
-            cfg.tts_cfg, cfg.tts_steps, cfg.tts_neg_anchor, tts_rate,
-            tts_rate == GL_TTS_RATE ? "" : " (dfn post-filter active)");
+    fprintf(stderr, "tts      %s @ %d Hz%s\n"
+                    "         voice %s, cfg %.2f, steps %d, anchor %.2f\n",
+            tts_model_path.c_str(), tts_rate,
+            tts_rate == GL_TTS_RATE ? "" : " (dfn post-filter active)",
+            tts_voice_path.c_str(), cfg.tts_cfg, cfg.tts_steps, cfg.tts_neg_anchor);
 
     // ---- End-of-utterance VAD (required for the listen→reply transition) ----
     {
         const char * vad_env = std::getenv("GEMMA_LIVE_VAD_MODEL");
         const std::string vad_path = vad_env ? vad_env : "models/firered-vad.gguf";
         if (g_eou_vad.init(vad_path.c_str())) {
-            fprintf(stderr, "vad: %s\n", vad_path.c_str());
+            fprintf(stderr, "eou      firered-vad, %d ms silence\n",
+                    cli_eou_vad::DEFAULT_SILENCE_MS);
         } else {
             fprintf(stderr,
                     "ERR: EOU VAD init failed (%s). Without it there's no way to know\n"
@@ -1261,8 +1263,7 @@ int main(int argc, char ** argv) {
                     vqe_path.c_str());
             return 1;
         }
-        fprintf(stderr, "aec: localvqe (%s, hop %d = %.0f ms)\n",
-                vqe_path.c_str(), g_aec.vqe.hop(),
+        fprintf(stderr, "aec      localvqe, %.0f ms hop\n",
                 1000.0 * g_aec.vqe.hop() / (double) GL_MIC_RATE);
     }
 
@@ -1283,7 +1284,7 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "ERR: capture device start failed\n");
         return 1;
     }
-    fprintf(stderr, "mic: %s, %u Hz mono f32\n", device.capture.name, device.sampleRate);
+    fprintf(stderr, "mic      %s @ %u Hz\n", device.capture.name, device.sampleRate);
     // Sanity check: macOS Microphone permission is keyed by binary identity,
     // and rebuilt binaries silently produce pure-zero audio when the grant is
     // missing. Sample the mic briefly and warn if it's dead. The model would
@@ -1325,10 +1326,14 @@ int main(int argc, char ** argv) {
                     ma_result_description(r), (int) r);
             return 1;
         }
-        fprintf(stderr, "playback negotiated: native sr=%u ch=%u format=%d (we asked sr=%d ch=1 f32)\n",
-                playback_device.playback.internalSampleRate,
-                playback_device.playback.internalChannels,
-                (int) playback_device.playback.internalFormat, tts_rate);
+        // Device-negotiation detail: only interesting when the audio path is
+        // misbehaving, so keep it out of a normal boot.
+        if (cfg.verbosity >= 2) {
+            fprintf(stderr, "playback negotiated: native sr=%u ch=%u format=%d (asked sr=%d ch=1 f32)\n",
+                    playback_device.playback.internalSampleRate,
+                    playback_device.playback.internalChannels,
+                    (int) playback_device.playback.internalFormat, tts_rate);
+        }
         r = ma_device_start(&playback_device);
         if (r != MA_SUCCESS) {
             fprintf(stderr, "ERR: playback start failed: %s (%d)\n",
@@ -1336,7 +1341,7 @@ int main(int argc, char ** argv) {
             return 1;
         }
     }
-    fprintf(stderr, "speaker: %s, %u Hz mono f32\n",
+    fprintf(stderr, "speaker  %s @ %u Hz\n",
             playback_device.playback.name, playback_device.sampleRate);
 
     // ---- Wake-word detector (moonshine streaming on AEC'd mic) ----
@@ -1355,8 +1360,8 @@ int main(int argc, char ** argv) {
         const char * wake_env = std::getenv("--kwd-wake");
         const std::string wake_path = wake_env ? wake_env : std::string("keywords/wake.txt");
         if (g_kwd.init(kwd_path.c_str(), wake_path.c_str())) {
-            fprintf(stderr, "keywords: moonshine streaming (%s, step=%d ms, len=%d ms, gate=%.0f dBFS)\n",
-                    kwd_path.c_str(), g_kwd.step_ms, g_kwd.length_ms, g_kwd.gate_dbfs);
+            fprintf(stderr, "wake     moonshine %d/%d ms, %zu phrases\n",
+                    g_kwd.step_ms, g_kwd.length_ms, cli_keyword_detector::n_loaded);
         } else {
             fprintf(stderr,
                     "ERR: keyword detector init failed (model at %s?).\n"
@@ -1373,10 +1378,10 @@ int main(int argc, char ** argv) {
         if (g_voice_vad.init(vad_path.c_str())) {
             g_voice_vad_inited = true;
             g_kwd.voice_vad = &g_voice_vad;
-            fprintf(stderr, "followup vad: enabled (%d hops sustained, rms gate %.0f dBFS)\n",
+            fprintf(stderr, "followup %d hops sustained, gate %.0f dBFS\n",
                     g_voice_vad.required_consecutive_hops, g_voice_vad.rms_gate_dbfs);
         } else {
-            fprintf(stderr, "followup vad: init failed (%s) — followup disabled\n", vad_path.c_str());
+            fprintf(stderr, "followup DISABLED — %s failed to load\n", vad_path.c_str());
         }
     }
 
@@ -1391,8 +1396,8 @@ int main(int argc, char ** argv) {
     };
     g_kwd.barge   = &g_barge;
     g_kwd.eou_vad = &g_eou_vad;
-    fprintf(stderr, "bargein: residual energy (%.1fx floor, min %.3f, %d ms sustained)\n",
-            g_barge.ratio, g_barge.abs_floor, g_barge.sustain_hops * 10);
+    fprintf(stderr, "bargein  residual energy, %.1fx floor, %d ms sustained\n",
+            g_barge.ratio, g_barge.sustain_hops * 10);
 
     // Start the always-on workers now that everything they depend on exists.
     // Tell AEC how to decimate the render-side reference: 24 kHz normally,
