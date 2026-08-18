@@ -273,6 +273,16 @@ struct VoiceSession::Impl {
     llama_pos                  n_past = 0;
     int                        turn   = 0;
 
+    // End of the <bos>+system block, and the matching point in prompt_hist.
+    // The context guard rewinds here: n_ctx is finite and n_past only grows,
+    // so without it a long enough conversation eventually fails a decode and
+    // every turn after it. Dropping the dialogue but keeping the system block
+    // costs the assistant its memory of the conversation and keeps it alive,
+    // which is the better failure for something always-on.
+    llama_pos                  n_past_after_system  = -1;
+    size_t                     prompt_hist_after_system = 0;
+    bool                       history_reset = false;  // next prefix starts fresh
+
     // Active-turn state (valid between begin_turn and end_turn)
     bool                                 in_turn          = false;
     mtmd_audio_stream                  * mtmd_stream      = nullptr;
@@ -583,6 +593,30 @@ VoiceSession::~VoiceSession() {
 bool VoiceSession::begin_turn() {
     Impl * s = impl.get();
     if (s->in_turn) { s->error = "begin_turn: turn already in progress"; return false; }
+
+    // ---- Context guard ----
+    // Reserve room for what this turn is about to add: a full 30 s of audio
+    // (~23 tokens/s measured), the reply, and the turn markers. Checked before
+    // n_past_before_turn is taken, so a rollback lands after the reset rather
+    // than restoring the history we just dropped.
+    if (s->n_past_after_system >= 0) {
+        const int reserve = s->n_predict + 768 + 64;
+        if (s->n_past > (llama_pos) std::max(0, s->params.n_ctx - reserve)) {
+            llama_memory_seq_rm(llama_get_memory(s->lctx), /*seq=*/ 0,
+                                s->n_past_after_system, /*p1=*/ -1);
+            if (s->spec_init && s->spec_init->context()) {
+                llama_memory_seq_rm(llama_get_memory(s->spec_init->context()), /*seq=*/ 0,
+                                    s->n_past_after_system, /*p1=*/ -1);
+            }
+            s->n_past = s->n_past_after_system;
+            s->prompt_hist.resize(s->prompt_hist_after_system);
+            common_sampler_reset(s->smpl);
+            s->history_reset = true;
+            fprintf(stderr, "session: context full — dropped conversation history "
+                            "(system prompt kept)\n");
+        }
+    }
+
     s->n_audio_tokens  = 0;
     s->n_past_before_turn = s->n_past;
     s->prompt_hist_before_turn = s->prompt_hist.size();
@@ -591,15 +625,34 @@ bool VoiceSession::begin_turn() {
     s->stats = TurnStats{};
 
     // Per-turn prefix:
-    //   Turn 0: <bos>{<|turn>system\n{system}<turn|>\n}<|turn>user\n<|audio>
-    //   Turn N>0: <turn|>\n<|turn>user\n<|audio>
-    const std::string sys_block = (s->turn == 0 && !s->system_prompt.empty())
-        ? "<|turn>system\n" + s->system_prompt + "<turn|>\n"
-        : "";
-    std::string prefix = (s->turn == 0 ? "" : "<turn|>\n")
-                       + sys_block
-                       + std::string("<|turn>user\n<|audio>");
-    auto toks = common_tokenize(s->lctx, prefix, /*add_special=*/ s->turn == 0,
+    //   Turn 0:   <bos>{<|turn>system\n{system}<turn|>\n} then the user block
+    //   After a history reset: the user block alone — the system block it
+    //   rewound to already ends in <turn|>, so there is no open turn to close
+    //   Turn N>0: <turn|>\n then the user block
+    //
+    // Turn 0 decodes the system block SEPARATELY from the user block purely so
+    // that n_past_after_system exists as a rewind point for the guard above.
+    if (s->turn == 0) {
+        const std::string sys = s->system_prompt.empty()
+            ? std::string()
+            : "<|turn>system\n" + s->system_prompt + "<turn|>\n";
+        auto sys_toks = common_tokenize(s->lctx, sys, /*add_special=*/ true,
+                                                     /*parse_special=*/ true);
+        if (decode_text_tokens(s->lctx, sys_toks, s->n_past, /*seq=*/ 0, s->n_batch,
+                               /*logits_last=*/ false)) {
+            s->error = "begin_turn: system prefix decode failed";
+            return false;
+        }
+        s->prompt_hist.insert(s->prompt_hist.end(), sys_toks.begin(), sys_toks.end());
+        s->n_past_after_system      = s->n_past;
+        s->prompt_hist_after_system = s->prompt_hist.size();
+    }
+
+    const std::string prefix = (s->turn == 0 || s->history_reset)
+        ? std::string("<|turn>user\n<|audio>")
+        : std::string("<turn|>\n<|turn>user\n<|audio>");
+    s->history_reset = false;
+    auto toks = common_tokenize(s->lctx, prefix, /*add_special=*/ false,
                                                 /*parse_special=*/ true);
     if (decode_text_tokens(s->lctx, toks, s->n_past, /*seq=*/ 0, s->n_batch,
                            /*logits_last=*/ false)) {

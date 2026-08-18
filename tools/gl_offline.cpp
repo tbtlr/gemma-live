@@ -21,7 +21,7 @@
 //
 // Usage:  gl-offline <turn1.wav> [turn2.wav ...]
 // Env:    GL_LLM, GL_MMPROJ, GL_MTP_MODEL, GL_MTP (0/1), GL_MTP_DRAFT,
-//         GL_TEMP, GL_PROMPT, GL_NPREDICT, GL_TTS_STEPS, GL_TTS_CFG
+//         GL_TEMP, GL_PROMPT, GL_NPREDICT, GL_NCTX, GL_TTS_STEPS, GL_TTS_CFG
 //         GL_ABORT_MS  — abort every turn this many ms into end_turn, to
 //                        reproduce what repeated barge-in does to the
 //                        conversation state. The LAST turn is never aborted,
@@ -98,6 +98,7 @@ int main(int argc, char ** argv) {
     cfg.tts_voice_path = env_or("GL_TTS_VOICE", "voices/vibevoice-voice-en-Gemma_woman.gguf");
     cfg.mtp_model_path = env_or("GL_MTP_MODEL", "models/mtp-gemma-4-E4B-it-Q4_0.gguf");
     cfg.n_predict      = std::atoi(env_or("GL_NPREDICT", "128"));
+    cfg.n_ctx          = std::atoi(env_or("GL_NCTX", "8192"));
     cfg.verbosity      = 1;
     if (const char * v = std::getenv("GL_MTP"))       cfg.enable_mtp  = std::atoi(v) != 0;
     if (const char * v = std::getenv("GL_MTP_DRAFT")) cfg.mtp_n_draft = std::max(1, std::atoi(v));
