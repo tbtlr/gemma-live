@@ -1,0 +1,42 @@
+# Wake phrases for GemmaLive — moonshine streaming + substring match.
+# One phrase per line. Matched case-insensitively; punctuation stripped.
+# Lines starting with # are comments. Blank lines ignored.
+# Override the file path with --kwd-wake.
+
+Hey Gemma
+Hi Gemma
+OK Gemma
+Okay Gemma
+Yo Gemma
+Gemma listen
+
+# Phonetic variants moonshine emits on this voice — keep these so a soft
+# "G" being heard as a "J" still triggers wake.
+Hey Jemma
+Hey Jemmah
+Hey Gemmer
+Hey Gemmah
+Hey Gimma
+Hey Gimmer
+Hey Gema
+Hey Jema
+Hey Jamma
+Hey Jenna
+Hey Jenny
+Hey Emma
+Hi Jemma
+Hi Jemmah
+Hi Gimma
+Yo Jemma
+Yo Jenna
+OK Jemma
+Okay Jemma
+
+# Compressed forms — "hey gemma" run together, with or without a leading
+# breath. Common when the user speaks fast.
+Hagemma
+Hagema
+Hajemma
+Hajema
+Agemma
+Ajemma
