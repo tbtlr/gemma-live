@@ -965,7 +965,10 @@ static void capture_cb(ma_device * dev, void * /*output*/, const void * input,
 struct audio_ring {
     std::mutex         m;
     std::vector<float> buf;
-    static constexpr size_t fade_length = 12 * 24;
+    // ~12 ms of ramp. Set from the real output rate at startup, because DFN
+    // moves playback to 48 kHz and a constant sized for 24 kHz would halve
+    // the ramp exactly when it is doing the most work.
+    size_t             fade_length = 12 * 24;
     std::atomic<int>   fade_remaining{-1};
     void reset_for_session() {
         std::lock_guard<std::mutex> lk(m);
@@ -1051,7 +1054,7 @@ static void playback_cb(ma_device * dev, void * out, const void * /*in*/,
         // queued — that's how barge-in cuts off the rest of the reply audio.
         for (size_t i = 0; i < take; i++) {
             if (fade > 0) {
-                const float g = (float) fade / (float) audio_ring::fade_length;
+                const float g = (float) fade / (float) ring->fade_length;
                 outf[i] = ring->buf[i] * g;
                 --fade;
             } else {
@@ -1329,6 +1332,11 @@ int main(int argc, char ** argv) {
     // Always-on. Streaming ASR transcribes the AEC'd mic; substring match
     // against the wake-phrase list fires when phase == GL_IDLE.
     {
+        // NOTE: moonshine needs a `tokenizer.bin` sitting NEXT TO the model
+        // file — it is resolved as dirname(model) + "/tokenizer.bin", never
+        // named anywhere in this repo. Point KWD_MODEL at a GGUF without that
+        // sibling and init fails with a message about the model, not the
+        // tokenizer. It ships alongside the model in the same HF repo.
         const char * kwd_env = std::getenv("GEMMA_LIVE_KWD_MODEL");
         const std::string kwd_path = kwd_env
             ? std::string(kwd_env)
@@ -1378,6 +1386,7 @@ int main(int argc, char ** argv) {
     // Start the always-on workers now that everything they depend on exists.
     // Tell AEC how to decimate the render-side reference: 24 kHz normally,
     // 48 kHz when DFN is on.
+    playback_ring.fade_length = (size_t) (12 * tts_rate / 1000);   // ~12 ms
     g_aec.set_render_src_rate(tts_rate);
     g_aec.start();
     g_kwd.start();

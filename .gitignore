@@ -23,7 +23,12 @@ voices/*.bin
 # Vendored dependency checkouts — each is its own git repo, cloned by hand.
 # NOT submodules (unlike vendor/localvqe, which is tracked in .gitmodules).
 # Together they are ~2 GB, so keep them out of `git add -A`.
-#   vendor/CrispASR   — https://github.com/CrispStrobe/CrispASR
+#   vendor/CrispASR   — fork of https://github.com/CrispStrobe/CrispASR,
+#       branch `gemma-live`. Upstream ALONE IS NOT ENOUGH: the streaming
+#       VibeVoice API (vibevoice_tts_stream_*) and the crispasr-tts target
+#       this project links are on that branch and nowhere else. It currently
+#       has no reachable remote — the work is committed locally only, so
+#       treat this checkout as the sole copy until one exists.
 #   vendor/llama.cpp  — https://github.com/tbtlr/llama.cpp @ mtmd-audio-streaming
 vendor/CrispASR/
 vendor/llama.cpp/
