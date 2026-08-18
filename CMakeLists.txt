@@ -21,7 +21,7 @@ set(GL_CRISPASR_DIR "${CMAKE_CURRENT_SOURCE_DIR}/vendor/CrispASR"  CACHE PATH "C
 if (NOT EXISTS "${GL_LLAMA_DIR}/CMakeLists.txt")
     message(FATAL_ERROR
         "llama.cpp fork not found at ${GL_LLAMA_DIR}.\n"
-        "First-time setup:\n"
+        "First-time setup (see also tools/fetch-models.sh for the weights):\n"
         "  git clone --branch gemma-live https://github.com/tbtlr/llama.cpp.git vendor/llama.cpp")
 endif()
 
