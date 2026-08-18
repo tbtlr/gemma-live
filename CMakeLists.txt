@@ -9,9 +9,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # command line (-DGL_LLAMA_DIR=... / -DGL_CRISPASR_DIR=...) to build against
 # a checkout elsewhere.
 #
-#   llama.cpp — our fork, branch mtmd-audio-streaming (the streaming
-#               mtmd_audio_stream_* API this project is built on is not
-#               upstream). https://github.com/tbtlr/llama.cpp
+#   llama.cpp — our fork, branch gemma-live. Neither the streaming
+#               mtmd_audio_stream_* API this project is built on nor the
+#               load_vision/load_audio params are upstream.
+#               https://github.com/tbtlr/llama.cpp
 #   CrispASR  — vibevoice streaming TTS, firered_vad, moonshine streaming.
 # ─────────────────────────────────────────────────────────────────────────
 set(GL_LLAMA_DIR    "${CMAKE_CURRENT_SOURCE_DIR}/vendor/llama.cpp" CACHE PATH "llama.cpp fork checkout")
@@ -21,7 +22,7 @@ if (NOT EXISTS "${GL_LLAMA_DIR}/CMakeLists.txt")
     message(FATAL_ERROR
         "llama.cpp fork not found at ${GL_LLAMA_DIR}.\n"
         "First-time setup:\n"
-        "  git clone --branch mtmd-audio-streaming https://github.com/tbtlr/llama.cpp.git vendor/llama.cpp")
+        "  git clone --branch gemma-live https://github.com/tbtlr/llama.cpp.git vendor/llama.cpp")
 endif()
 
 # Pull in the llama.cpp fork. Provides ggml, llama, llama-common,

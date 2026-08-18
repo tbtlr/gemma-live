@@ -29,6 +29,6 @@ voices/*.bin
 #       this project links are on that branch and nowhere else. It currently
 #       has no reachable remote — the work is committed locally only, so
 #       treat this checkout as the sole copy until one exists.
-#   vendor/llama.cpp  — https://github.com/tbtlr/llama.cpp @ mtmd-audio-streaming
+#   vendor/llama.cpp  — https://github.com/tbtlr/llama.cpp @ gemma-live
 vendor/CrispASR/
 vendor/llama.cpp/
