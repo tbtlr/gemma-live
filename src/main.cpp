@@ -384,18 +384,29 @@ struct cli_aec {
     vqe_aec            vqe;
     std::vector<float> vqe_out;   // reused across iterations; wrapper appends
 
-    // NOTE: do not add an "idle bypass" that skips LocalVQE while the room is
-    // quiet to save its ~20% of a core. It was tried and it costs far more
-    // than it saves, for a non-obvious reason.
+    // LocalVQE is the largest fixed cost in this app: ~73% of a core,
+    // continuously, measured subtractively in situ (a standalone harness
+    // says ~20% — do not trust it, it does not reproduce the thread config).
     //
-    // LocalVQE's noise gate takes a quiet room all the way to EXACTLY zero.
-    // That silence is what lets the wake detector's own gate stay shut, and
-    // that gate is worth ~85-115% of a core. Bypassing the model hands the
-    // detector raw mic ambient instead, which re-opens its gate and runs
-    // moonshine flat out — measured 39% -> 134% idle.
+    // An idle bypass to reclaim that has been tried TWICE and is not shipped.
     //
-    // The trap is that the bypass engages precisely when the room is quiet,
-    // i.e. exactly when it does the most damage. The 20% is buying the 100%.
+    // The naive version forwards the raw mic while the room is quiet. It made
+    // things dramatically worse: LocalVQE's noise gate takes a quiet room to
+    // exactly zero, and that zero is what keeps the wake detector's own gate
+    // shut. Feeding raw ambient instead re-opens it and runs moonshine flat
+    // out. The bypass fires precisely when the room is quiet, so it did the
+    // most damage exactly when it engaged.
+    //
+    // The corrected version publishes zeros rather than raw mic, at a
+    // threshold matching LocalVQE's own noise gate. That reasoning is sound
+    // but unproven: the benefit only appears in a genuinely silent room,
+    // which is hard to measure in, and it puts a hard gate on the audio path
+    // — speech below the threshold would be zeroed where the model might
+    // have recovered it. Unmeasurable upside plus a real downside is not a
+    // trade worth making on the path the whole app depends on.
+    //
+    // If you revisit it: measure in a silent room, and verify wake-word
+    // recall at low speech levels before trusting it.
 
     std::mutex         cap_m, ren_m;
     std::vector<float> cap_buf;
