@@ -2,3 +2,4 @@
 	path = vendor/localvqe
 	url = https://github.com/localai-org/LocalVQE.git
 	branch = main
+	ignore = dirty
