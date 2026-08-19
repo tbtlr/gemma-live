@@ -1219,9 +1219,8 @@ int main(int argc, char ** argv) {
     // Reported here rather than at read time: tokenising needs the model's
     // vocab, which only exists once the session is up.
     if (!system_prompt_path.empty()) {
-        fprintf(stderr, "system   %s (%d tokens, %.0f%% of %d ctx)\n",
-                system_prompt_path.c_str(), session->system_tokens(),
-                100.0 * session->system_tokens() / (double) cfg.n_ctx, cfg.n_ctx);
+        fprintf(stderr, "system   %s (%d tokens)\n",
+                system_prompt_path.c_str(), session->system_tokens());
     }
 
     const int tts_rate = session->tts_sample_rate();
@@ -1415,17 +1414,27 @@ int main(int argc, char ** argv) {
     g_aec.start();
     g_kwd.start();
 
+    // How long the followup window stays open after a reply before we fall
+    // back to needing the wake word. Read before the banner because the
+    // banner quotes it — a hardcoded number there goes stale the moment
+    // anyone sets the override.
+    constexpr int AWAIT_TIMEOUT_MS_DEFAULT = 5000;
+    int await_timeout_ms = AWAIT_TIMEOUT_MS_DEFAULT;
+    if (const char * v = std::getenv("GEMMA_LIVE_AWAIT_TIMEOUT_MS")) {
+        await_timeout_ms = std::max(1000, atoi(v));
+    }
+
     fprintf(stderr,
         "\n"
         "  gemma-live ready.\n"
         "\n"
         "  Say \"hey gemma\" to start a conversation, then keep talking — no\n"
         "  need to re-say the wake word between turns. Just start talking\n"
-        "  during a reply to interrupt it. After 20 s of silence the\n"
+        "  during a reply to interrupt it. After %.0f s of silence the\n"
         "  conversation ends and we go back to waiting for the wake word.\n"
         "\n"
         "  Ctrl+C to quit.\n"
-        "\n");
+        "\n", await_timeout_ms / 1000.0);
 
     // ── Session callbacks ───────────────────────────────────────────────
     // marker_printed drives the cyan [♪] shown inline in the token stream
@@ -1463,11 +1472,6 @@ int main(int argc, char ** argv) {
     // (wake phrase + lead-in on the first turn; the user's first words on
     // bargein / followup) instead of the ring's full 8 s.
     constexpr size_t SESSION_KEEP_SAMPLES = (size_t) GL_MIC_RATE * 2;  // 2 s lookback
-    constexpr int    AWAIT_TIMEOUT_MS_DEFAULT = 20000;
-    int await_timeout_ms = AWAIT_TIMEOUT_MS_DEFAULT;
-    if (const char * v = std::getenv("GEMMA_LIVE_AWAIT_TIMEOUT_MS")) {
-        await_timeout_ms = std::max(1000, atoi(v));
-    }
 
     while (!g_shutdown.load()) {
         // ──────────────────────────────────────────────────────────────
