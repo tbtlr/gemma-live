@@ -1410,10 +1410,12 @@ int main(int argc, char ** argv) {
     fprintf(stderr,
         "\n"
         "  gemma-live ready.\n"
+        "\n"
         "  Say \"hey gemma\" to start a conversation, then keep talking — no\n"
         "  need to re-say the wake word between turns. Just start talking\n"
         "  during a reply to interrupt it. After 20 s of silence the\n"
         "  conversation ends and we go back to waiting for the wake word.\n"
+        "\n"
         "  Ctrl+C to quit.\n"
         "\n");
 
