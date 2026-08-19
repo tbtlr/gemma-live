@@ -1348,7 +1348,7 @@ int main(int argc, char ** argv) {
             return 1;
         }
     }
-    fprintf(stderr, "spk      %s @ %u Hz\n",
+    fprintf(stderr, "out      %s @ %u Hz\n",
             playback_device.playback.name, playback_device.sampleRate);
 
     // ---- Wake-word detector (moonshine streaming on AEC'd mic) ----
