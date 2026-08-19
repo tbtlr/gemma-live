@@ -171,6 +171,16 @@ struct loudness_filter {
     }
 };
 
+// The system block exactly as it goes into the KV cache. Built here rather
+// than inline because two places need it to agree byte for byte: begin_turn
+// decodes it on turn 0, and create() counts its tokens for the boot line. If
+// they drifted, the reported context cost would quietly stop matching the
+// real one.
+static std::string system_block(const std::string & system_prompt) {
+    if (system_prompt.empty()) return {};
+    return "<|turn>system\n" + system_prompt + "<turn|>\n";
+}
+
 // ────────────────────────────────────────────────────────────────────────
 // Low-level decode helpers.
 // ────────────────────────────────────────────────────────────────────────
@@ -291,6 +301,7 @@ struct VoiceSession::Impl {
     // every turn after it. Dropping the dialogue but keeping the system block
     // costs the assistant its memory of the conversation and keeps it alive,
     // which is the better failure for something always-on.
+    int                        n_system_tokens = 0;
     llama_pos                  n_past_after_system  = -1;
     size_t                     prompt_hist_after_system = 0;
     bool                       history_reset = false;  // next prefix starts fresh
@@ -389,6 +400,7 @@ const std::string & VoiceSession::last_error() const { return impl->error; }
 const TurnStats   & VoiceSession::last_stats() const { return impl->stats; }
 int   VoiceSession::tts_sample_rate()          const { return impl->tts_output_rate; }
 bool  VoiceSession::mtp_active()               const { return impl->spec_on; }
+int   VoiceSession::system_tokens()            const { return impl->n_system_tokens; }
 
 std::unique_ptr<VoiceSession> VoiceSession::create(const SessionConfig & cfg,
                                                    std::string * err) {
@@ -561,6 +573,14 @@ std::unique_ptr<VoiceSession> VoiceSession::create(const SessionConfig & cfg,
         s->system_prompt.pop_back();
     }
 
+    // Count exactly what begin_turn will decode for turn 0, markers and <bos>
+    // included, so the reported figure is the real standing context cost.
+    {
+        s->n_system_tokens = (int) common_tokenize(s->lctx, system_block(s->system_prompt),
+                                                   /*add_special=*/ true,
+                                                   /*parse_special=*/ true).size();
+    }
+
     // ---- DFN post-filter (optional) ----
     // Load the DFN model once per session if a path was supplied. The
     // per-turn dfn_stream is allocated in begin_turn and freed in end_turn —
@@ -656,11 +676,9 @@ bool VoiceSession::begin_turn() {
     // Turn 0 decodes the system block SEPARATELY from the user block purely so
     // that n_past_after_system exists as a rewind point for the guard above.
     if (s->turn == 0) {
-        const std::string sys = s->system_prompt.empty()
-            ? std::string()
-            : "<|turn>system\n" + s->system_prompt + "<turn|>\n";
-        auto sys_toks = common_tokenize(s->lctx, sys, /*add_special=*/ true,
-                                                     /*parse_special=*/ true);
+        auto sys_toks = common_tokenize(s->lctx, system_block(s->system_prompt),
+                                        /*add_special=*/ true,
+                                        /*parse_special=*/ true);
         if (decode_text_tokens(s->lctx, sys_toks, s->n_past, /*seq=*/ 0, s->n_batch,
                                /*logits_last=*/ false)) {
             s->error = "begin_turn: system prefix decode failed";

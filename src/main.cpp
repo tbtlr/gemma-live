@@ -1149,6 +1149,7 @@ int main(int argc, char ** argv) {
         : std::string("voices/vibevoice-voice-en-Gemma_woman.gguf");
 
     std::string system_prompt;
+    std::string system_prompt_path;
     {
         const char * prompt_env  = std::getenv("GEMMA_LIVE_SYSTEM_PROMPT");
         const std::string prompt_path = prompt_env ? prompt_env : "prompts/chat.txt";
@@ -1156,8 +1157,7 @@ int main(int argc, char ** argv) {
         if (f) {
             std::stringstream ss; ss << f.rdbuf();
             system_prompt = ss.str();
-            fprintf(stderr, "system   %s (%zu chars)\n",
-                    prompt_path.c_str(), system_prompt.size());
+            system_prompt_path = prompt_path;
         } else {
             fprintf(stderr, "system   none (%s not found)\n", prompt_path.c_str());
         }
@@ -1216,6 +1216,14 @@ int main(int argc, char ** argv) {
     // Resolve the actual TTS output rate. With DFN enabled this is 48000;
     // without DFN it stays at GL_TTS_RATE (24000). Everything downstream —
     // speaker, AEC render, stats — must use this value, not the constant.
+    // Reported here rather than at read time: tokenising needs the model's
+    // vocab, which only exists once the session is up.
+    if (!system_prompt_path.empty()) {
+        fprintf(stderr, "system   %s (%d tokens, %.0f%% of %d ctx)\n",
+                system_prompt_path.c_str(), session->system_tokens(),
+                100.0 * session->system_tokens() / (double) cfg.n_ctx, cfg.n_ctx);
+    }
+
     const int tts_rate = session->tts_sample_rate();
     fprintf(stderr, "tts      %s @ %d Hz%s\n"
                     "         voice %s, cfg %.2f, steps %d, anchor %.2f\n",

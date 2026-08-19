@@ -176,6 +176,13 @@ public:
      * False when MTP was disabled, had no path, or failed to load. */
     bool mtp_active() const;
 
+    /* Tokens the system block occupies: <bos> + the turn markers + the prompt
+     * itself. This is a STANDING cost — the context guard rewinds to the end
+     * of this block and never evicts it — so it is the number worth showing,
+     * rather than a character count that maps to nothing actionable.
+     * 0 when there is no system prompt. */
+    int system_tokens() const;
+
     /* Turn protocol:
      *   1. begin_turn()
      *   2. push_audio(pcm, n)   — repeatedly, while the user speaks
