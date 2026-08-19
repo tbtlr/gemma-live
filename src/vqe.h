@@ -33,27 +33,31 @@ public:
 
     // noise_gate_dbfs gates the model's own residual (roughly -60 to -80 dBFS)
     // while leaving speech (-30 to -10 dBFS) untouched.
-    // `quiet` captures LocalVQE's own stderr during load. The library has no
-    // verbosity switch and unconditionally prints its backend banner plus the
-    // absolute path it resolved — noise on every start. It is captured rather
-    // than discarded, and replayed if the load fails, so a real diagnostic is
-    // never the thing we threw away.
+    // `quiet` captures LocalVQE's own output during load. The library has no
+    // verbosity switch: it prints a backend banner and the absolute path it
+    // resolved to stderr, and a "Graph model: N tensors..." line to STDOUT
+    // (localvqe_graph.cpp, with verbose hardcoded true at both call sites).
+    // Both streams have to be captured — the stdout one is easy to miss
+    // because redirecting stdout to a file block-buffers it, so it vanishes
+    // if the process is killed rather than exiting cleanly.
+    //
+    // Captured, not discarded: replayed if the load fails, so a real
+    // diagnostic is never the thing we threw away.
     bool init(const std::string & model_path, int threads = 0,
               float noise_gate_dbfs = -45.0f, bool quiet = true) {
-        int   saved_fd = -1;
-        FILE * spool   = nullptr;
+        int   saved_err = -1, saved_out = -1;
+        FILE * spool     = nullptr;
         if (quiet) {
-            fflush(stderr);
-            saved_fd = dup(STDERR_FILENO);
-            spool    = tmpfile();
-            if (saved_fd >= 0 && spool) dup2(fileno(spool), STDERR_FILENO);
+            fflush(stderr); fflush(stdout);
+            spool     = tmpfile();
+            saved_err = dup(STDERR_FILENO);
+            saved_out = dup(STDOUT_FILENO);
+            if (spool && saved_err >= 0) dup2(fileno(spool), STDERR_FILENO);
+            if (spool && saved_out >= 0) dup2(fileno(spool), STDOUT_FILENO);
         }
         const bool ok = init_impl(model_path, threads, noise_gate_dbfs);
-        if (saved_fd >= 0) {
-            fflush(stderr);
-            dup2(saved_fd, STDERR_FILENO);
-            close(saved_fd);
-        }
+        if (saved_err >= 0) { fflush(stderr); dup2(saved_err, STDERR_FILENO); close(saved_err); }
+        if (saved_out >= 0) { fflush(stdout); dup2(saved_out, STDOUT_FILENO); close(saved_out); }
         if (spool) {
             if (!ok) {                       // load failed — show what it said
                 fflush(spool);
