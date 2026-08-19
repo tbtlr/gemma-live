@@ -499,8 +499,14 @@ std::unique_ptr<VoiceSession> VoiceSession::create(const SessionConfig & cfg,
             s->spec_on    = true;
             s->spec_n_max = std::max(common_speculative_n_max(&s->params.speculative), 1);
             if (cfg.verbosity >= 1) {
-                fprintf(stderr, "mtp      %s, draft %d tok/step\n",
-                        cfg.mtp_model_path.c_str(), s->spec_n_max);
+                // Say what a step yields, not just what is drafted: each step
+                // decodes the token we already sampled PLUS the draft, so it
+                // returns 1 token when the draft is rejected and n+1 when it
+                // is accepted. Reporting only "draft n" reads as though that
+                // were the whole output.
+                fprintf(stderr, "mtp      %s, draft %d/step -> %d-%d tok\n",
+                        cfg.mtp_model_path.c_str(), s->spec_n_max,
+                        1, s->spec_n_max + 1);
             }
         } else {
             // Drop the half-built speculative state so nothing downstream sees

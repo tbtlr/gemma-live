@@ -790,9 +790,9 @@ struct cli_keyword_detector {
                 }
                 n_loaded = out.size();
                 if (!out.empty()) return out;
-                fprintf(stderr, "asr      %s had no usable phrases — using built-ins\n", path);
+                fprintf(stderr, "kwd      %s had no usable phrases — using built-ins\n", path);
             } else {
-                fprintf(stderr, "asr      %s not found — using built-ins\n", path);
+                fprintf(stderr, "kwd      %s not found — using built-ins\n", path);
             }
         }
         for (size_t i = 0; i < n_builtins; i++) {
@@ -1367,7 +1367,7 @@ int main(int argc, char ** argv) {
         const char * wake_env = std::getenv("--kwd-wake");
         const std::string wake_path = wake_env ? wake_env : std::string("keywords/wake.txt");
         if (g_kwd.init(kwd_path.c_str(), wake_path.c_str())) {
-            fprintf(stderr, "asr      moonshine %d/%d ms, %zu wake phrases\n",
+            fprintf(stderr, "kwd      moonshine %d/%d ms, %zu wake phrases\n",
                     g_kwd.step_ms, g_kwd.length_ms, cli_keyword_detector::n_loaded);
         } else {
             fprintf(stderr,
