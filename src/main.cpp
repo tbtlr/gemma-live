@@ -1159,7 +1159,7 @@ int main(int argc, char ** argv) {
             system_prompt = ss.str();
             system_prompt_path = prompt_path;
         } else {
-            fprintf(stderr, "system   none (%s not found)\n", prompt_path.c_str());
+            fprintf(stderr, "sys      none (%s not found)\n", prompt_path.c_str());
         }
     }
 
@@ -1219,7 +1219,7 @@ int main(int argc, char ** argv) {
     // Reported here rather than at read time: tokenising needs the model's
     // vocab, which only exists once the session is up.
     if (!system_prompt_path.empty()) {
-        fprintf(stderr, "system   %s (%d tokens)\n",
+        fprintf(stderr, "sys      %s (%d tokens)\n",
                 system_prompt_path.c_str(), session->system_tokens());
     }
 
@@ -1348,7 +1348,7 @@ int main(int argc, char ** argv) {
             return 1;
         }
     }
-    fprintf(stderr, "speaker  %s @ %u Hz\n",
+    fprintf(stderr, "spk      %s @ %u Hz\n",
             playback_device.playback.name, playback_device.sampleRate);
 
     // ---- Wake-word detector (moonshine streaming on AEC'd mic) ----
@@ -1385,10 +1385,10 @@ int main(int argc, char ** argv) {
         if (g_voice_vad.init(vad_path.c_str())) {
             g_voice_vad_inited = true;
             g_kwd.voice_vad = &g_voice_vad;
-            fprintf(stderr, "followup %d hops sustained, gate %.0f dBFS\n",
+            fprintf(stderr, "fup      %d hops sustained, gate %.0f dBFS\n",
                     g_voice_vad.required_consecutive_hops, g_voice_vad.rms_gate_dbfs);
         } else {
-            fprintf(stderr, "followup DISABLED — %s failed to load\n", vad_path.c_str());
+            fprintf(stderr, "fup      DISABLED — %s failed to load\n", vad_path.c_str());
         }
     }
 
@@ -1403,7 +1403,7 @@ int main(int argc, char ** argv) {
     };
     g_kwd.barge   = &g_barge;
     g_kwd.eou_vad = &g_eou_vad;
-    fprintf(stderr, "bargein  residual energy, %.1fx floor, %d ms sustained\n",
+    fprintf(stderr, "brg      residual energy, %.1fx floor, %d ms sustained\n",
             g_barge.ratio, g_barge.sustain_hops * 10);
 
     // Start the always-on workers now that everything they depend on exists.
