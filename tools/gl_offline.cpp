@@ -92,11 +92,11 @@ int main(int argc, char ** argv) {
     }
 
     SessionConfig cfg;
-    cfg.llm_model_path = env_or("GL_LLM",       "models/gemma-4-E4B-it-Q4_0.gguf");
+    cfg.llm_model_path = env_or("GL_LLM",       "models/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf");
     cfg.mmproj_path    = env_or("GL_MMPROJ",    "models/mmproj-gemma-4-E4B-it-Q8_0.gguf");
     cfg.tts_model_path = env_or("GL_TTS",       "models/vibevoice-realtime-0.5b-q4_k.gguf");
     cfg.tts_voice_path = env_or("GL_TTS_VOICE", "voices/vibevoice-voice-en-Gemma_woman.gguf");
-    cfg.mtp_model_path = env_or("GL_MTP_MODEL", "models/mtp-gemma-4-E4B-it-Q4_0.gguf");
+    cfg.mtp_model_path = env_or("GL_MTP_MODEL", "models/mtp-gemma-4-E4B-it-qat-Q4_0.gguf");
     cfg.n_predict      = std::atoi(env_or("GL_NPREDICT", "128"));
     cfg.n_ctx          = std::atoi(env_or("GL_NCTX", "8192"));
     cfg.verbosity      = 1;

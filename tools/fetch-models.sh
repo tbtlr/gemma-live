@@ -19,13 +19,19 @@ FAILED=0
 
 # dest | url
 ITEMS=(
-  # ── LLM: Gemma 4 E4B. The trio must come from ONE build. The mmproj is not
-  # interchangeable across model sizes, and the MTP head only predicts a trunk
-  # it matches — a head from a different quantisation pipeline drops
-  # speculative-decoding acceptance far enough to make it a slowdown.
-  "models/gemma-4-E4B-it-Q4_0.gguf|$HF/ggml-org/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_0.gguf"
+  # ── LLM: Gemma 4 E4B, quantisation-aware-trained. QAT is trained to survive
+  # 4-bit rather than merely rounded down to it, so this is both smaller and
+  # faster than the plain Q4_0 build it replaced: 3.91 vs 4.26 GiB, and 88.0
+  # vs 81.2 tok/s decode. Prefill and MTP acceptance are unchanged.
+  #
+  # The trunk and the MTP head have to come from the same repo. The head only
+  # predicts a trunk it matches, and a head from a different quantisation
+  # pipeline drops acceptance far enough to turn speculation into a slowdown.
+  # The mmproj is separately not interchangeable across model SIZES, and only
+  # ggml-org publishes a Q8_0 one — the smallest that keeps audio correct.
+  "models/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf|$HF/unsloth/gemma-4-E4B-it-qat-GGUF/resolve/main/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf"
+  "models/mtp-gemma-4-E4B-it-qat-Q4_0.gguf|$HF/unsloth/gemma-4-E4B-it-qat-GGUF/resolve/main/MTP/mtp-gemma-4-E4B-it-Q4_0.gguf"
   "models/mmproj-gemma-4-E4B-it-Q8_0.gguf|$HF/ggml-org/gemma-4-E4B-it-GGUF/resolve/main/mmproj-gemma-4-E4B-it-Q8_0.gguf"
-  "models/mtp-gemma-4-E4B-it-Q4_0.gguf|$HF/ggml-org/gemma-4-E4B-it-GGUF/resolve/main/mtp-gemma-4-E4B-it-Q4_0.gguf"
 
   # ── AEC + noise suppression
   "models/localvqe.gguf|$HF/LocalAI-io/LocalVQE/resolve/main/localvqe-v1.3-4.8M-f32.gguf"

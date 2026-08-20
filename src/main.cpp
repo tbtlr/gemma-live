@@ -1129,7 +1129,7 @@ int main(int argc, char ** argv) {
     // The mmproj is not interchangeable across model sizes: an E2B mmproj
     // with an E4B trunk produces garbage embeddings, so override them
     // together or not at all.
-    params.model.path  = "models/gemma-4-E4B-it-Q4_0.gguf";
+    params.model.path  = "models/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf";
     params.mmproj.path = "models/mmproj-gemma-4-E4B-it-Q8_0.gguf";
     if (const char * v = std::getenv("GEMMA_LIVE_LLM_MODEL")) params.model.path  = v;
     if (const char * v = std::getenv("GEMMA_LIVE_MMPROJ"))    params.mmproj.path = v;
@@ -1183,7 +1183,7 @@ int main(int argc, char ** argv) {
     // A missing or unloadable head is not fatal — the session logs and falls
     // back to one token per decode.
     cfg.enable_mtp     = true;
-    cfg.mtp_model_path = "models/mtp-gemma-4-E4B-it-Q4_0.gguf";
+    cfg.mtp_model_path = "models/mtp-gemma-4-E4B-it-qat-Q4_0.gguf";
     if (const char * v = std::getenv("GEMMA_LIVE_MTP_MODEL")) cfg.mtp_model_path = v;
     if (const char * v = std::getenv("GEMMA_LIVE_MTP"))       cfg.enable_mtp     = (atoi(v) != 0);
     if (const char * v = std::getenv("GEMMA_LIVE_MTP_DRAFT")) cfg.mtp_n_draft    = std::max(1, atoi(v));

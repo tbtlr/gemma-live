@@ -60,7 +60,7 @@ struct SessionConfig {
      * the knobs. Measured here, M-series, chat prompt, 9 turns per config,
      * vs the same config's one-token-per-decode baseline:
      *
-     *   E4B-Q4_0 + Q4_0 head        E2B-IQ4_XS + Q8_0 head
+     *   E4B + matching head          E2B-IQ4_XS + Q8_0 head
      *     n=1  +36%  (62% acc)  <--   n=1  -13%  (33-48% acc)
      *     n=2  +10%  (29-75%)         n=2  -20%  (25-56%)
      *     n=3  -16%  (19-67%)         n=3  -35%  (14-41%)
@@ -68,7 +68,16 @@ struct SessionConfig {
      * The E2B pair loses on both counts: its target step is cheap enough
      * that the draft can't earn it back, and its head came from a different
      * quantisation pipeline than the trunk, so it predicts it less well.
-     * The E4B trio is all ggml-org Q4_0/Q8_0 — one pipeline — and wins.
+     *
+     * Acceptance is NOISY — the same pair measures 71-81% across runs. Do not
+     * read a single run as a regression; average at least three.
+     *
+     * On the shipped QAT pair (trunk UD-Q4_K_XL, head Q4_0, both unsloth),
+     * 128-token text decode over 3 runs:
+     *     no speculation   88.0 tok/s
+     *     n=1             104.4 tok/s   (74% accepted)
+     * The previous plain-Q4_0 pair measured 81.2 / 102.8 at 75% — same with
+     * speculation on, 8% slower without, and 350 MB larger.
      *
      * n=1 is the setting; n=3 (llama.cpp's own default) is a regression on
      * BOTH pairs, because a rejected draft costs a full target slot and
