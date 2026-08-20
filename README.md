@@ -110,23 +110,36 @@ LocalVQE while idle — it re-opens that gate and costs far more than it saves.
 
 ## Tuning
 
-Everything is an environment variable; the defaults are measured, not guessed.
+Everything is a command-line flag, grouped by the same three-letter prefixes the
+startup block prints — so the line describing a subsystem tells you which flags
+tune it. `--help` lists all of them with their defaults.
 
-```
-GEMMA_LIVE_LLM_MODEL / _MMPROJ / _MTP_MODEL   model paths (swap together)
-GEMMA_LIVE_MTP=0                              disable speculative decoding
-GEMMA_LIVE_MTP_DRAFT=N                        tokens drafted per step (1 is best)
-GEMMA_LIVE_SYSTEM_PROMPT=path                 default prompts/chat.txt
-GEMMA_LIVE_AWAIT_TIMEOUT_MS=N                 followup window, default 5000
-GEMMA_LIVE_TTS_FIRST_CHUNK=N                  latent frames before first audio
-GEMMA_LIVE_KWD_STEP_MS / _LENGTH_MS           wake detector cadence and window
-GEMMA_LIVE_KWD_GATE_RATIO / _GATE_FLOOR       wake silence gate
-GEMMA_LIVE_BARGE_RATIO / _FLOOR / _SUSTAIN_MS barge-in sensitivity
+```bash
+./build/gemma-live --help
+./build/gemma-live --mtp-off --vad-silence 350 --tts-chunk 2
 ```
 
-Debugging: `GEMMA_LIVE_KWD_DEBUG`, `GEMMA_LIVE_VAD_DEBUG`,
-`GEMMA_LIVE_BARGE_DEBUG` print what each detector is seeing. Verbosity 2
-restores the full ggml/llama diagnostics that are filtered out by default.
+```
+  llm   --llm-model --llm-mmproj --llm-threads --llm-ctx --llm-predict --llm-temp
+  sys   --sys-prompt
+  mtp   --mtp-off --mtp-model --mtp-draft
+  tts   --tts-model --tts-voice --tts-cfg --tts-steps --tts-anchor --tts-chunk --tts-rms
+  dfn   --dfn-model
+  aec   --aec-model --aec-threads --aec-gate
+  kwd   --kwd-model --kwd-wake --kwd-step --kwd-window --kwd-gpu
+        --kwd-ratio --kwd-floor --kwd-nogate --kwd-duck --kwd-debug
+  vad   --vad-model --vad-silence --vad-debug
+  fup   --fup-timeout --fup-hops --fup-gate
+  brg   --brg-ratio --brg-floor --brg-sustain --brg-debug
+```
+
+The defaults are measured rather than guessed; the reasoning behind the
+non-obvious ones is in `src/session.h` and `src/barge.h`.
+
+`--kwd-debug`, `--vad-debug` and `--brg-debug` print what each detector is
+seeing, which is the fastest way to tell "correctly quiet" from "stuck".
+`--verbosity 2` restores the full ggml/llama diagnostics that are filtered out
+by default.
 
 ## Development
 

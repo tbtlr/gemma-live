@@ -16,6 +16,7 @@
 //
 #include "session.h"
 #include "barge.h"
+#include "opts.h"
 #include "transcript.h"
 #include "vqe.h"
 
@@ -116,7 +117,6 @@ struct cli_eou_vad {
     bool   debug = false;
 
     bool init(const char * model_path) {
-        debug = std::getenv("GEMMA_LIVE_VAD_DEBUG") != nullptr;
         vad = firered_vad_init(model_path);
         return vad != nullptr;
     }
@@ -286,13 +286,6 @@ struct cli_voice_vad {
     bool                  debug = false;
 
     bool init(const char * model_path) {
-        debug = std::getenv("GEMMA_LIVE_VAD_DEBUG") != nullptr;
-        if (const char * v = std::getenv("GEMMA_LIVE_VAD_HOPS")) {
-            required_consecutive_hops = std::max(1, atoi(v));
-        }
-        if (const char * v = std::getenv("GEMMA_LIVE_VAD_RMS_DBFS")) {
-            rms_gate_dbfs = (float) std::atof(v);
-        }
         vad = firered_vad_init(model_path);
         return vad != nullptr;
     }
@@ -437,18 +430,10 @@ struct cli_aec {
     // One EMA over 10 ms frames, tau ~50 ms.
     std::atomic<float>          far_rms{0.0f};
 
-    bool init(const std::string & model_path) {
+    bool init(const std::string & model_path, int threads, float gate_dbfs) {
         // Threads: LocalVQE is ~5M params on CPU and has to keep up with a
         // 16 ms hop while the LLM owns the performance cores. 2 is plenty and
         // leaves the cores where the latency actually is.
-        int threads = 2;
-        if (const char * v = std::getenv("GEMMA_LIVE_VQE_THREADS")) {
-            threads = std::max(1, std::atoi(v));
-        }
-        float gate_dbfs = -45.0f;
-        if (const char * v = std::getenv("GEMMA_LIVE_VQE_GATE_DBFS")) {
-            gate_dbfs = (float) std::atof(v);
-        }
         if (!vqe.init(model_path, threads, gate_dbfs)) return false;
         vqe_out.reserve(4096);
         return true;
@@ -670,6 +655,7 @@ struct cli_keyword_detector {
     // costing a third of what it used to. Raise step_ms for more savings at
     // the cost of wake latency; shorten length_ms only if the phrase still
     // fits inside it.
+    bool                          use_gpu   = false;
     int                           step_ms   = 200;
     int                           length_ms = 1500;
 
@@ -713,18 +699,7 @@ struct cli_keyword_detector {
     cli_eou_vad                 * eou_vad   = nullptr;   // threshold target
 
     bool init(const char * model_path, const char * wake_path) {
-        debug = std::getenv("GEMMA_LIVE_KWD_DEBUG") != nullptr;
-        if (const char * v = std::getenv("GEMMA_LIVE_KWD_GATE_DBFS")) {
-            gate_dbfs = (float) std::atof(v);
-        }
         gate_rms = std::pow(10.0f, gate_dbfs / 20.0f);
-        if (const char * v = std::getenv("GEMMA_LIVE_KWD_STEP_MS"))   step_ms   = std::max(50, atoi(v));
-        if (const char * v = std::getenv("GEMMA_LIVE_KWD_LENGTH_MS")) length_ms = std::max(1000, atoi(v));
-        if (const char * v = std::getenv("GEMMA_LIVE_KWD_GATE_RATIO")) gate_ratio     = (float) std::atof(v);
-        // Escape hatch: feed every chunk, as before the gate existed. Useful
-        // for A/B-ing what the gate is actually worth on a given machine.
-        if (const char * v = std::getenv("GEMMA_LIVE_KWD_GATE_OFF")) gate_off = (atoi(v) != 0);
-        if (const char * v = std::getenv("GEMMA_LIVE_KWD_GATE_FLOOR")) gate_abs_floor = (float) std::atof(v);
         preroll.reserve(16000);
 
         static const char * builtin_wake[] = {
@@ -743,10 +718,7 @@ struct cli_keyword_detector {
         // (57.8% vs 58.1% of a core), and keeping it off the GPU leaves that
         // for the LLM and the TTS diffusion, which are the latency-critical
         // consumers. Set GEMMA_LIVE_KWD_USE_GPU=1 to put it back.
-        params.use_gpu   = false;
-        if (const char * v = std::getenv("GEMMA_LIVE_KWD_USE_GPU")) {
-            params.use_gpu = (atoi(v) != 0);
-        }
+        params.use_gpu   = use_gpu;
         params.verbosity = 0;
         ctx = moonshine_streaming_init_from_file(model_path, params);
         if (!ctx) return false;
@@ -1119,6 +1091,15 @@ static void sigint_handler(int) {
 // main
 // ────────────────────────────────────────────────────────────────────────
 int main(int argc, char ** argv) {
+    gl_opts O;
+    {
+        std::string err;
+        if (!gl_parse_args(argc, argv, O, &err)) {
+            fprintf(stderr, "%s\n\n", err.c_str());
+            gl_usage(stderr, argv[0]);
+            return 2;
+        }
+    }
     ggml_time_init();
     common_params params;
     common_init();
@@ -1129,30 +1110,21 @@ int main(int argc, char ** argv) {
     // The mmproj is not interchangeable across model sizes: an E2B mmproj
     // with an E4B trunk produces garbage embeddings, so override them
     // together or not at all.
-    params.model.path  = "models/gemma-4-E4B-it-qat-UD-Q4_K_XL.gguf";
-    params.mmproj.path = "models/mmproj-gemma-4-E4B-it-Q8_0.gguf";
-    if (const char * v = std::getenv("GEMMA_LIVE_LLM_MODEL")) params.model.path  = v;
-    if (const char * v = std::getenv("GEMMA_LIVE_MMPROJ"))    params.mmproj.path = v;
+    params.model.path  = O.llm_model;
+    params.mmproj.path = O.llm_mmproj;
     params.use_jinja   = true;
-    params.n_predict   = 256;
-    params.n_ctx       = 8192;
+    params.n_predict   = O.llm_predict;
+    params.n_ctx       = O.llm_ctx;
 
     std::signal(SIGINT, sigint_handler);
 
-    const char * tts_model_env = std::getenv("GEMMA_LIVE_TTS_MODEL");
-    const char * tts_voice_env = std::getenv("GEMMA_LIVE_TTS_VOICE");
-    const std::string tts_model_path = tts_model_env
-        ? std::string(tts_model_env)
-        : std::string("models/vibevoice-realtime-0.5b-q4_k.gguf");
-    const std::string tts_voice_path = tts_voice_env
-        ? std::string(tts_voice_env)
-        : std::string("voices/vibevoice-voice-en-Gemma_woman.gguf");
+    const std::string tts_model_path = O.tts_model;
+    const std::string tts_voice_path = O.tts_voice;
 
     std::string system_prompt;
     std::string system_prompt_path;
     {
-        const char * prompt_env  = std::getenv("GEMMA_LIVE_SYSTEM_PROMPT");
-        const std::string prompt_path = prompt_env ? prompt_env : "prompts/chat.txt";
+        const std::string prompt_path = O.sys_prompt;
         std::ifstream f(prompt_path);
         if (f) {
             std::stringstream ss; ss << f.rdbuf();
@@ -1182,26 +1154,23 @@ int main(int argc, char ** argv) {
     //
     // A missing or unloadable head is not fatal — the session logs and falls
     // back to one token per decode.
-    cfg.enable_mtp     = true;
-    cfg.mtp_model_path = "models/mtp-gemma-4-E4B-it-qat-Q4_0.gguf";
-    if (const char * v = std::getenv("GEMMA_LIVE_MTP_MODEL")) cfg.mtp_model_path = v;
-    if (const char * v = std::getenv("GEMMA_LIVE_MTP"))       cfg.enable_mtp     = (atoi(v) != 0);
-    if (const char * v = std::getenv("GEMMA_LIVE_MTP_DRAFT")) cfg.mtp_n_draft    = std::max(1, atoi(v));
-    if (const char * v = std::getenv("GEMMA_LIVE_TTS_CFG"))    cfg.tts_cfg        = (float) atof(v);
-    if (const char * v = std::getenv("GEMMA_LIVE_TTS_STEPS"))  cfg.tts_steps      = atoi(v);
-    if (const char * v = std::getenv("GEMMA_LIVE_TTS_ANCHOR")) cfg.tts_neg_anchor = (float) atof(v);
-    // Latency knob: smaller first chunk speaks sooner. See SessionConfig.
-    if (const char * v = std::getenv("GEMMA_LIVE_TTS_FIRST_CHUNK")) {
-        cfg.tts_first_chunk_frames = std::max(1, atoi(v));
-    }
+    cfg.enable_mtp     = O.mtp_on;
+    cfg.mtp_model_path = O.mtp_model;
+    cfg.mtp_n_draft    = std::max(1, O.mtp_draft);
+    cfg.tts_cfg        = O.tts_cfg;
+    cfg.tts_steps      = O.tts_steps;
+    cfg.tts_neg_anchor = O.tts_anchor;
+    cfg.tts_first_chunk_frames = std::max(1, O.tts_chunk);
+    cfg.tts_target_rms = O.tts_rms;
+    cfg.temperature    = O.llm_temp;
+    cfg.n_threads      = O.llm_threads;
+    cfg.verbosity      = O.verbosity;
 
     // DFN post-filter for TTS is disabled by default — we're going to
     // handle vibevoice's music-artifact openers via prompt engineering
     // instead of scrubbing them after the fact. Set GEMMA_LIVE_DFN_MODEL
     // to a valid path to re-enable.
-    if (const char * v = std::getenv("GEMMA_LIVE_DFN_MODEL")) {
-        cfg.dfn_model_path = v;
-    }
+    cfg.dfn_model_path = O.dfn_model;
 
     std::string session_err;
     auto session = VoiceSession::create(cfg, &session_err);
@@ -1232,11 +1201,11 @@ int main(int argc, char ** argv) {
 
     // ---- End-of-utterance VAD (required for the listen→reply transition) ----
     {
-        const char * vad_env = std::getenv("GEMMA_LIVE_VAD_MODEL");
-        const std::string vad_path = vad_env ? vad_env : "models/firered-vad.gguf";
+        const std::string vad_path = O.vad_model;
+        g_eou_vad.debug = O.vad_debug;
+        g_eou_vad.silence_threshold_ms.store(O.vad_silence);
         if (g_eou_vad.init(vad_path.c_str())) {
-            fprintf(stderr, "eou      firered-vad, %d ms silence\n",
-                    cli_eou_vad::DEFAULT_SILENCE_MS);
+            fprintf(stderr, "vad      firered-vad, %d ms silence\n", O.vad_silence);
         } else {
             fprintf(stderr,
                     "ERR: EOU VAD init failed (%s). Without it there's no way to know\n"
@@ -1258,9 +1227,8 @@ int main(int argc, char ** argv) {
     // suppression only, so mic levels downstream are no longer normalised —
     // relevant to cli_eou_vad's fixed pre-gain if levels ever look off.
     {
-        const char * vqe_env = std::getenv("GEMMA_LIVE_VQE_MODEL");
-        const std::string vqe_path = vqe_env ? vqe_env : "models/localvqe.gguf";
-        if (!g_aec.init(vqe_path)) {
+        const std::string vqe_path = O.aec_model;
+        if (!g_aec.init(vqe_path, std::max(1, O.aec_threads), O.aec_gate)) {
             fprintf(stderr,
                     "ERR: AEC init failed (%s). Every mic consumer reads the AEC\n"
                     "     output, so there is nothing to fall back to. Fetch the\n"
@@ -1360,12 +1328,16 @@ int main(int argc, char ** argv) {
         // named anywhere in this repo. Point KWD_MODEL at a GGUF without that
         // sibling and init fails with a message about the model, not the
         // tokenizer. It ships alongside the model in the same HF repo.
-        const char * kwd_env = std::getenv("GEMMA_LIVE_KWD_MODEL");
-        const std::string kwd_path = kwd_env
-            ? std::string(kwd_env)
-            : std::string("models/moonshine-streaming-tiny-q4_k.gguf");
-        const char * wake_env = std::getenv("--kwd-wake");
-        const std::string wake_path = wake_env ? wake_env : std::string("keywords/wake.txt");
+        const std::string kwd_path  = O.kwd_model;
+        const std::string wake_path = O.kwd_wake;
+        g_kwd.debug          = O.kwd_debug;
+        g_kwd.use_gpu        = O.kwd_gpu;
+        g_kwd.step_ms        = std::max(50,   O.kwd_step);
+        g_kwd.length_ms      = std::max(1000, O.kwd_window);
+        g_kwd.gate_ratio     = O.kwd_ratio;
+        g_kwd.gate_abs_floor = O.kwd_floor;
+        g_kwd.gate_off       = O.kwd_nogate;
+        g_kwd.gate_dbfs      = O.kwd_duck;
         if (g_kwd.init(kwd_path.c_str(), wake_path.c_str())) {
             fprintf(stderr, "kwd      moonshine %d/%d ms, %zu wake phrases\n",
                     g_kwd.step_ms, g_kwd.length_ms, cli_keyword_detector::n_loaded);
@@ -1380,8 +1352,10 @@ int main(int argc, char ** argv) {
 
     // ---- Followup voice-start detector (VAD, assistant silent) ----
     {
-        const char * vad_env = std::getenv("GEMMA_LIVE_VAD_MODEL");
-        const std::string vad_path = vad_env ? vad_env : "models/firered-vad.gguf";
+        const std::string vad_path = O.vad_model;
+        g_voice_vad.debug = O.vad_debug;
+        g_voice_vad.required_consecutive_hops = std::max(1, O.fup_hops);
+        g_voice_vad.rms_gate_dbfs             = O.fup_gate;
         if (g_voice_vad.init(vad_path.c_str())) {
             g_voice_vad_inited = true;
             g_kwd.voice_vad = &g_voice_vad;
@@ -1393,6 +1367,10 @@ int main(int argc, char ** argv) {
     }
 
     // ---- Barge-in detector (AEC residual energy, assistant audible) ----
+    g_barge.ratio        = O.brg_ratio;
+    g_barge.abs_floor    = O.brg_floor;
+    g_barge.sustain_hops = std::max(1, O.brg_sustain / 10);
+    g_barge.debug        = O.brg_debug;
     g_barge.init();
     g_barge.on_fire = []() {
         if (g_voice_activity.exchange(true)) return;
@@ -1418,11 +1396,7 @@ int main(int argc, char ** argv) {
     // back to needing the wake word. Read before the banner because the
     // banner quotes it — a hardcoded number there goes stale the moment
     // anyone sets the override.
-    constexpr int AWAIT_TIMEOUT_MS_DEFAULT = 5000;
-    int await_timeout_ms = AWAIT_TIMEOUT_MS_DEFAULT;
-    if (const char * v = std::getenv("GEMMA_LIVE_AWAIT_TIMEOUT_MS")) {
-        await_timeout_ms = std::max(1000, atoi(v));
-    }
+    const int await_timeout_ms = std::max(1000, O.fup_timeout);
 
     fprintf(stderr,
         "\n"

@@ -112,6 +112,12 @@ struct SessionConfig {
     float temperature      = 0.3f;
     float top_p            = 0.95f;
     int   top_k            = 40;
+
+    /* Compute threads for the LLM and the audio encoder. 0 = size to the
+     * machine's performance cores; including efficiency cores measurably
+     * hurts latency on M-series, because the batch waits on the slowest
+     * thread. */
+    int   n_threads        = 0;
     float tts_cfg          = 1.5f;
     int   tts_steps        = 5;
 
@@ -137,6 +143,8 @@ struct SessionConfig {
     int   tts_first_chunk_frames = 3;
     float tts_neg_anchor   = 0.2f;
     bool  tts_loudness_norm = true;
+    /* Perceived-loudness target for the TTS normaliser. */
+    float tts_target_rms   = 0.06f;
 
     /* 0 = silent, 1 = boot/turn info, 2 = ggml/llama diag. */
     int   verbosity        = 1;

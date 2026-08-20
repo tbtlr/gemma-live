@@ -29,7 +29,6 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
-#include <cstdlib>
 #include <cstdio>
 #include <functional>
 #include <vector>
@@ -56,13 +55,8 @@ struct barge_detector {
     bool  fired    = false;
     bool  debug    = false;
 
+    // Call after setting the tunables above.
     void init() {
-        debug = std::getenv("GEMMA_LIVE_BARGE_DEBUG") != nullptr;
-        if (const char * v = std::getenv("GEMMA_LIVE_BARGE_RATIO")) ratio     = (float) std::atof(v);
-        if (const char * v = std::getenv("GEMMA_LIVE_BARGE_FLOOR")) abs_floor = (float) std::atof(v);
-        if (const char * v = std::getenv("GEMMA_LIVE_BARGE_SUSTAIN_MS")) {
-            sustain_hops = std::max(1, std::atoi(v) / 10);
-        }
         pending.reserve(HOP_SAMPLES * 4);
     }
 

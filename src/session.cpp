@@ -35,7 +35,6 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
-#include <cstdlib>   // getenv, atof
 #include <cstring>
 #include <string>
 #include <thread>
@@ -105,8 +104,8 @@ static void errors_only_log(ggml_log_level level, const char * text, void * /*ud
 // that would clip below PEAK_CEIL with perceptually-transparent compression
 // on the rare loud peaks.
 //
-// TARGET_RMS is overridable at runtime via GEMMA_LIVE_TTS_TARGET_RMS for
-// per-user loudness preference; the rest are tuned defaults.
+// The target is set from SessionConfig::tts_target_rms; the rest are tuned
+// defaults.
 // ────────────────────────────────────────────────────────────────────────
 struct loudness_filter {
     static constexpr float DEFAULT_TARGET_RMS = 0.06f;   // perceived loudness target
@@ -122,13 +121,6 @@ struct loudness_filter {
     bool  fresh      = true;
 
     void reset() {
-        // Re-read the runtime override at every turn boundary so a live
-        // edit of the env var takes effect on the next reply.
-        target_rms = DEFAULT_TARGET_RMS;
-        if (const char * v = std::getenv("GEMMA_LIVE_TTS_TARGET_RMS")) {
-            const float x = (float) std::atof(v);
-            if (x > 0.0f && x < 1.0f) target_rms = x;
-        }
         ema_gain = 1.0f;
         fresh    = true;
     }
@@ -452,11 +444,7 @@ std::unique_ptr<VoiceSession> VoiceSession::create(const SessionConfig & cfg,
     // includes efficiency cores on Apple Silicon, which slows the slowest
     // thread and stalls the whole batch. Override via GEMMA_LIVE_N_THREADS.
     {
-        int nt = detect_perf_cores();
-        if (const char * v = std::getenv("GEMMA_LIVE_N_THREADS")) {
-            const int x = std::atoi(v);
-            if (x > 0) nt = x;
-        }
+        int nt = (cfg.n_threads > 0) ? cfg.n_threads : detect_perf_cores();
         s->params.cpuparams.n_threads       = nt;
         s->params.cpuparams_batch.n_threads = nt;
     }
@@ -564,6 +552,9 @@ std::unique_ptr<VoiceSession> VoiceSession::create(const SessionConfig & cfg,
     s->tts_steps        = vparams.tts_steps;
     s->tts_neg_anchor   = vparams.neg_condition_anchor;
     s->loudness_norm    = cfg.tts_loudness_norm;
+    if (cfg.tts_target_rms > 0.0f && cfg.tts_target_rms < 1.0f) {
+        s->loudness.target_rms = cfg.tts_target_rms;
+    }
 
     s->tts_ctx = vibevoice_init_from_file(cfg.tts_model_path.c_str(), vparams);
     if (!s->tts_ctx) {
