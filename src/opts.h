@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <algorithm>
 #include <string>
 #include <vector>
 
@@ -78,6 +79,9 @@ struct gl_opts {
     float       nod_gain      = 0.45f;
     bool        nod_debug     = false;
     std::string nod_dump;
+    // rt — Realtime API server (gl-serve only)
+    std::string rt_host  = "127.0.0.1";
+    int         rt_port  = 8927;
 
     int         fup_timeout = 5000;
     int         fup_hops    = 3;
@@ -141,7 +145,7 @@ inline std::vector<gl_opt_def> gl_option_table(gl_opts & o) {
       {"--kwd-duck",    'f', &o.kwd_duck,    "dBFS", "echo gate while the assistant is speaking"},
       {"--kwd-debug",   'b', &o.kwd_debug,   nullptr,"log transcripts and gate state"},
 
-      {"--vad-model",   's', &o.vad_model,   "PATH", "firered-vad model; drives both end-of-turn and follow-up"},
+      {"--vad-model",   's', &o.vad_model,   "PATH", "firered-vad model (end-of-turn detection)"},
       {"--vad-silence", 'i', &o.vad_silence, "MS",   "silence before a turn is sent"},
       {"--vad-empty",   'i', &o.vad_empty,   "MS",   "send a turn the VAD heard no speech in after this"},
       {"--vad-debug",   'b', &o.vad_debug,   nullptr,"log VAD verdicts"},
@@ -156,6 +160,8 @@ inline std::vector<gl_opt_def> gl_option_table(gl_opts & o) {
       {"--nod-gain",    'f', &o.nod_gain,    "X",    "level relative to speech"},
       {"--nod-debug",   'b', &o.nod_debug,   nullptr,"log every nod and every near miss"},
       {"--nod-dump",    's', &o.nod_dump,    "DIR",  "write the rendered clips there as WAV and exit"},
+      {"--rt-host",     's', &o.rt_host,     "ADDR", "address to bind"},
+      {"--rt-port",     'i', &o.rt_port,     "N",    "port to bind"},
 
       {"--fup-timeout", 'i', &o.fup_timeout, "MS",   "how long the follow-up window stays open"},
       {"--fup-hops",    'i', &o.fup_hops,    "N",    "100 ms hops of voice needed to continue"},
@@ -186,13 +192,32 @@ inline const char * gl_group_title(const std::string & prefix) {
         { "fup",     "follow-up"           },
         { "nod",     "backchannels"        },
         { "brg",     "barge-in"            },
+        { "rt",      "realtime server"     },
         { "general", "general"             },
     };
     for (const auto & n : names) if (prefix == n.prefix) return n.title;
     return prefix.c_str();
 }
 
-inline void gl_usage(FILE * f, const char * argv0) {
+// `groups` is the whitelist of flag prefixes this binary accepts — gl-serve
+// has no microphone, so --kwd-* would be a lie there, and gemma-live has no
+// socket, so --rt-* would be a lie here. Restricting both the usage text and
+// the parser from one list keeps a flag from being documented by a binary
+// that would ignore it.
+inline bool gl_group_enabled(const std::vector<std::string> & groups, const std::string & g) {
+    if (groups.empty()) return true;
+    if (g == "general") return true;
+    return std::find(groups.begin(), groups.end(), g) != groups.end();
+}
+
+inline std::string gl_group_of(const char * flag) {
+    const char * head = flag + 2;
+    const char * dash = strchr(head, '-');
+    return dash ? std::string(head, dash) : std::string("general");
+}
+
+inline void gl_usage(FILE * f, const char * argv0,
+                     const std::vector<std::string> & groups = {}) {
     gl_opts d;                       // defaults, rendered from the real values
     const auto tbl = gl_option_table(d);
     fprintf(f,
@@ -207,9 +232,8 @@ inline void gl_usage(FILE * f, const char * argv0) {
         // Group by the prefix before the first '-'; flags without one (e.g.
         // --verbosity) fall into "general" rather than constructing a string
         // from a null terminator.
-        const char * head = o.flag + 2;
-        const char * dash = strchr(head, '-');
-        std::string  g    = dash ? std::string(head, dash) : std::string("general");
+        const std::string g = gl_group_of(o.flag);
+        if (!gl_group_enabled(groups, g)) continue;
         if (g != group) { group = g; fprintf(f, "\n  %s\n", gl_group_title(g)); }
         char left[64];
         snprintf(left, sizeof(left), "%s%s%s", o.flag, o.meta ? " " : "", o.meta ? o.meta : "");
@@ -228,14 +252,16 @@ inline void gl_usage(FILE * f, const char * argv0) {
 }
 
 // Returns false on a bad argument, with *err describing it.
-inline bool gl_parse_args(int argc, char ** argv, gl_opts & o, std::string * err) {
+inline bool gl_parse_args(int argc, char ** argv, gl_opts & o, std::string * err,
+                          const std::vector<std::string> & groups = {}) {
     const auto tbl = gl_option_table(o);
     for (int i = 1; i < argc; i++) {
         const std::string a = argv[i];
-        if (a == "-h" || a == "--help") { gl_usage(stdout, argv[0]); exit(0); }
+        if (a == "-h" || a == "--help") { gl_usage(stdout, argv[0], groups); exit(0); }
         bool matched = false;
         for (const auto & d : tbl) {
             if (a != d.flag) continue;
+            if (!gl_group_enabled(groups, gl_group_of(d.flag))) continue;
             matched = true;
             // 'b' sets its flag, 'o' clears it. Spelled as a type rather
             // than special-cased by name: the previous version hardcoded

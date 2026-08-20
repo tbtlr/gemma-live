@@ -239,6 +239,25 @@ set_target_properties(gl-offline PROPERTIES
     INSTALL_RPATH "${GL_RPATH}"
 )
 
+# ─────────────────────────────────────────────────────────────────────────
+# gl-serve — OpenAI Realtime-compatible WebSocket front-end.
+#
+# A third consumer of gl-session, alongside the app and the offline driver.
+# No microphone, no speaker, no AEC: audio arrives and leaves over a socket,
+# so none of LocalVQE, miniaudio or the barge-in detector is linked in.
+#
+# The only extra include is llama.cpp's vendored nlohmann/json; the
+# WebSocket layer (src/ws.h) is written against BSD sockets and CommonCrypto
+# so that speaking the protocol costs no new third-party dependency.
+# ─────────────────────────────────────────────────────────────────────────
+add_executable(gl-serve src/realtime.cpp)
+target_include_directories(gl-serve PRIVATE ${GL_LLAMA_DIR}/vendor)   # nlohmann/json.hpp
+target_link_libraries(gl-serve PRIVATE gl-session)
+set_target_properties(gl-serve PROPERTIES
+    BUILD_RPATH   "${GL_RPATH}"
+    INSTALL_RPATH "${GL_RPATH}"
+)
+
 enable_testing()
 foreach(t barge transcript nod)
     add_executable(${t}-test tests/${t}_test.cpp)

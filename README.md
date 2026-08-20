@@ -131,6 +131,7 @@ tune it. `--help` lists all of them with their defaults.
   vad   --vad-model --vad-silence --vad-empty --vad-debug
   nod   --nod-off --nod-phrases --nod-after --nod-gap --nod-mono
         --nod-per-turn --nod-len --nod-gain --nod-debug --nod-dump
+  rt    --rt-host --rt-port                        (gl-serve only)
   fup   --fup-timeout --fup-hops --fup-gate
   brg   --brg-ratio --brg-floor --brg-sustain --brg-debug
 ```
@@ -195,10 +196,76 @@ What lands on disk is what reaches the speaker — trimmed, capped, and at
 ./build/gemma-live --nod-phrases "Mm-hm.,Sure.,Okay." --nod-dump /tmp/nods
 ```
 
+## Realtime API server
+
+`gl-serve` exposes the same voice loop over OpenAI's Realtime protocol, so
+anything already written against that API can drive Gemma locally.
+
+```bash
+./build/gl-serve                       # ws://127.0.0.1:8927/v1/realtime
+./build/gl-serve --rt-port 9000 --vad-silence 350
+```
+
+Audio is mono PCM16 at 24 kHz in both directions, base64 inside the JSON
+events, exactly as the protocol specifies. Turn detection defaults to
+`server_vad` (the same firered VAD the app uses); send
+`session.update` with `turn_detection: null` to drive turns yourself with
+`input_audio_buffer.commit` + `response.create`.
+
+Supported events:
+
+```
+client -> server   session.update  input_audio_buffer.append/commit/clear
+                   response.create  response.cancel  conversation.item.truncate
+
+server -> client   session.created/updated
+                   input_audio_buffer.speech_started/speech_stopped
+                   input_audio_buffer.committed/cleared
+                   conversation.item.created
+                   response.created  response.output_item.added
+                   response.content_part.added
+                   response.output_audio.delta/done
+                   response.output_audio_transcript.delta/done
+                   response.content_part.done  response.output_item.done
+                   response.done  error
+```
+
+Event names follow the GA schema (`response.output_audio.delta`), not the
+older beta spelling (`response.audio.delta`).
+
+### What it deliberately does not do
+
+**One session at a time.** `VoiceSession` owns a single llama context and is
+not thread-safe, so a second conversation would need a second copy of every
+model. A client arriving while another is connected gets close code 1013
+rather than an unbounded wait.
+
+**No input transcription.** `input_audio_transcription` is reported as
+`null`, because Gemma consumes audio as tokens through the mtmd encoder and
+never produces a transcript of the user's speech. Output transcription works
+— those are the sampled tokens, streamed as
+`response.output_audio_transcript.delta`.
+
+**Session-fixed fields.** `instructions`, `voice`, `temperature` and
+`max_response_output_tokens` belong to the loaded `VoiceSession` and are set
+by the flags above at startup. `session.update` accepts them so clients that
+always send them keep working, but ignores the values and echoes the real
+ones back in `session.updated`, so a client can see what is actually in
+effect.
+
+**Cancel drops the whole turn.** `response.cancel` and
+`conversation.item.truncate` both roll the KV cache back past the entire
+assistant turn, rather than truncating it at the exact millisecond playback
+stopped. That is coarser than the spec, and deliberately so: leaving a
+half-finished reply in context teaches the model to truncate itself on later
+turns.
+
+**pcm16 only.** No G.711, no Opus.
+
 ## Development
 
 ```bash
-cmake --build build --target gemma-live gl-offline barge-test transcript-test nod-test
+cmake --build build --target gemma-live gl-offline gl-serve barge-test transcript-test nod-test
 cd build && ctest
 ```
 
@@ -214,8 +281,8 @@ far better than it is. Run several turns, because a speculative-decoding cache
 bug shows up on turn 2, not turn 1. `GL_ABORT_MS=250` reproduces repeated
 barge-in.
 
-Both binaries share `gl-session`, so build them together — a stale `gl-offline`
-silently measures the old code.
+All three binaries share `gl-session`, so build them together — a stale
+`gl-offline` silently measures the old code.
 
 ## Numbers
 

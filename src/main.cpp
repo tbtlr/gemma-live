@@ -1208,9 +1208,11 @@ int main(int argc, char ** argv) {
     gl_opts O;
     {
         std::string err;
-        if (!gl_parse_args(argc, argv, O, &err)) {
+        const std::vector<std::string> groups =
+            {"llm","sys","mtp","tts","dfn","aec","kwd","vad","nod","fup","brg"};
+        if (!gl_parse_args(argc, argv, O, &err, groups)) {
             fprintf(stderr, "%s\n\n", err.c_str());
-            gl_usage(stderr, argv[0]);
+            gl_usage(stderr, argv[0], groups);
             return 2;
         }
     }
