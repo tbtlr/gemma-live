@@ -1018,9 +1018,12 @@ static bool write_wav(const std::string & path, const std::vector<float> & pcm, 
     if (!f) return false;
     const uint32_t n_bytes = (uint32_t) (pcm.size() * 2);
     const uint32_t riff    = 36 + n_bytes;
-    const uint16_t ch = 1, bits = 16, fmt = 1;
+    const uint16_t ch = 1, bits = 16, fmt = 1, align = 2;
     const uint32_t srate = (uint32_t) rate, brate = srate * 2;
-    const uint16_t align = 2, sub1 = 16;
+    // 4 bytes on the wire, so 4 bytes in memory. Declaring this uint16_t and
+    // writing 4 read past the end of it and picked up `align` as the high
+    // half, which made every file unparseable for a one-field reason.
+    const uint32_t sub1 = 16;
     fwrite("RIFF", 1, 4, f);  fwrite(&riff,  4, 1, f);
     fwrite("WAVEfmt ", 1, 8, f); fwrite(&sub1, 4, 1, f);
     fwrite(&fmt, 2, 1, f);   fwrite(&ch,    2, 1, f);
