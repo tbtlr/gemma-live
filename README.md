@@ -128,7 +128,7 @@ tune it. `--help` lists all of them with their defaults.
   aec   --aec-model --aec-threads --aec-gate
   kwd   --kwd-model --kwd-wake --kwd-step --kwd-window --kwd-gpu
         --kwd-ratio --kwd-floor --kwd-nogate --kwd-duck --kwd-debug
-  vad   --vad-model --vad-silence --vad-debug
+  vad   --vad-model --vad-silence --vad-empty --vad-debug
   nod   --nod-off --nod-phrases --nod-after --nod-gap --nod-mono
         --nod-per-turn --nod-len --nod-gain --nod-debug --nod-dump
   fup   --fup-timeout --fup-hops --fup-gate

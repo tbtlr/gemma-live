@@ -63,6 +63,7 @@ struct gl_opts {
     // vad — voice activity; shared by the end-of-turn and follow-up detectors
     std::string vad_model   = "models/firered-vad.gguf";
     int         vad_silence = 500;
+    int         vad_empty   = 1200;
     bool        vad_debug   = false;
 
     // fup — followup window
@@ -142,6 +143,7 @@ inline std::vector<gl_opt_def> gl_option_table(gl_opts & o) {
 
       {"--vad-model",   's', &o.vad_model,   "PATH", "firered-vad model; drives both end-of-turn and follow-up"},
       {"--vad-silence", 'i', &o.vad_silence, "MS",   "silence before a turn is sent"},
+      {"--vad-empty",   'i', &o.vad_empty,   "MS",   "send a turn the VAD heard no speech in after this"},
       {"--vad-debug",   'b', &o.vad_debug,   nullptr,"log VAD verdicts"},
 
       {"--nod-off",     'o', &o.nod_on,     nullptr,"disable backchannels"},

@@ -49,12 +49,12 @@ Empty-wake handling:
 - If the user's audio is JUST the wake phrase with no follow-up question
   or command, respond with exactly:
 
-  Yeah?
+  Hey!
 
   and nothing else. No greeting, no "how can I help", no "I'm here" —
-  just the single word "Yeah?". This is a short acknowledgment so the
+  just the single word "Hey?". This is a short acknowledgment so the
   user can continue talking. They will interrupt you ("voice barge-in")
   if they want to add a real request.
-- Do NOT use "Yeah?" in any other situation. If the user did give you a
+- Do NOT use "Hey?" in any other situation. If the user did give you a
   real request — even a short one like "what time is it" — answer it
   normally.

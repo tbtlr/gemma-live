@@ -1716,6 +1716,23 @@ int main(int argc, char ** argv) {
                     fprintf(stderr, "  [max listening %d ms reached — sending]\n", MAX_LISTENING_MS);
                     break;
                 }
+                // EOU can only fire once the VAD has heard at least one
+                // voiced verdict, so a turn it never hears speech in has no
+                // way out but the 28 s cap above. That is not a rare corner:
+                // saying just the wake phrase is a normal thing to do, and
+                // the prompt answers it with "Yeah?". If the wake phrase
+                // itself does not land as speech — it is short, it is
+                // already 800 ms into the past when the window fills, and
+                // detection lag eats the rest — the assistant simply appears
+                // to ignore you. Send what we have and let it answer.
+                if (!g_eou_vad.ever_voiced &&
+                    listening_elapsed_ms() >= O.vad_empty) {
+                    if (O.vad_debug) {
+                        fprintf(stderr, "  [vad: no speech in %d ms — sending bare wake]\n",
+                                O.vad_empty);
+                    }
+                    break;
+                }
                 if (pushed_samples >= MAX_AUDIO_SAMPLES) {
                     fprintf(stderr, "  [max audio %d s reached — sending]\n",
                             (int) (MAX_AUDIO_SAMPLES / GL_MIC_RATE));
