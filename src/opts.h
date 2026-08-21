@@ -5,7 +5,7 @@
 // compiled in rather than a number someone retyped into a string.
 //
 // Flags are grouped by the same three-letter prefixes the boot block prints
-// (llm, sys, mtp, tts, aec, kwd, vad, fup, brg), so a line of startup output
+// (llm, sys, mtp, tts, aec, kwd, vad, nod, fup, brg), so a line of startup output
 // tells you which flags tune it.
 #pragma once
 
@@ -66,6 +66,17 @@ struct gl_opts {
     bool        vad_debug   = false;
 
     // fup — followup window
+    // nod — backchannels ("mm-hm") while the user is still talking
+    bool        nod_on        = true;
+    std::string nod_phrases   = "Mm-hm.,Mm.,Uh-huh.,Right.";
+    int         nod_after     = 3000;
+    int         nod_gap       = 3500;
+    int         nod_monologue = 6000;
+    int         nod_per_turn  = 3;
+    int         nod_len       = 450;
+    float       nod_gain      = 0.45f;
+    bool        nod_debug     = false;
+
     int         fup_timeout = 5000;
     int         fup_hops    = 3;
     float       fup_gate    = -30.0f;
@@ -100,7 +111,7 @@ inline std::vector<gl_opt_def> gl_option_table(gl_opts & o) {
 
       {"--sys-prompt",  's', &o.sys_prompt,  "PATH", "system prompt file"},
 
-      {"--mtp-off",     'b', &o.mtp_on,      nullptr,"disable speculative decoding"},
+      {"--mtp-off",     'o', &o.mtp_on,      nullptr,"disable speculative decoding"},
       {"--mtp-model",   's', &o.mtp_model,   "PATH", "MTP draft head; must match the trunk"},
       {"--mtp-draft",   'i', &o.mtp_draft,   "N",    "tokens drafted per step (1 measures best)"},
 
@@ -132,6 +143,16 @@ inline std::vector<gl_opt_def> gl_option_table(gl_opts & o) {
       {"--vad-silence", 'i', &o.vad_silence, "MS",   "silence before a turn is sent"},
       {"--vad-debug",   'b', &o.vad_debug,   nullptr,"log VAD verdicts"},
 
+      {"--nod-off",     'o', &o.nod_on,     nullptr,"disable backchannels"},
+      {"--nod-phrases", 's', &o.nod_phrases, "LIST", "comma-separated clips to pre-render"},
+      {"--nod-after",   'i', &o.nod_after,   "MS",   "never nod before the turn is this long"},
+      {"--nod-gap",     'i', &o.nod_gap,     "MS",   "minimum spacing between nods"},
+      {"--nod-mono",    'i', &o.nod_monologue,"MS",  "nod without transcript evidence past this"},
+      {"--nod-per-turn",'i', &o.nod_per_turn,"N",    "most nods in one turn"},
+      {"--nod-len",     'i', &o.nod_len,     "MS",   "cap on clip length (0 = uncapped)"},
+      {"--nod-gain",    'f', &o.nod_gain,    "X",    "level relative to speech"},
+      {"--nod-debug",   'b', &o.nod_debug,   nullptr,"log every nod and every near miss"},
+
       {"--fup-timeout", 'i', &o.fup_timeout, "MS",   "how long the follow-up window stays open"},
       {"--fup-hops",    'i', &o.fup_hops,    "N",    "100 ms hops of voice needed to continue"},
       {"--fup-gate",    'f', &o.fup_gate,    "dBFS", "RMS gate for follow-up voice"},
@@ -159,6 +180,7 @@ inline const char * gl_group_title(const std::string & prefix) {
         { "kwd",     "wake word"           },
         { "vad",     "voice activity"      },
         { "fup",     "follow-up"           },
+        { "nod",     "backchannels"        },
         { "brg",     "barge-in"            },
         { "general", "general"             },
     };
@@ -193,7 +215,8 @@ inline void gl_usage(FILE * f, const char * argv0) {
                         if (!v.empty()) snprintf(def, sizeof(def), "  [%s]", v.c_str()); break; }
             case 'i': snprintf(def, sizeof(def), "  [%d]", *(int*)o.p);   break;
             case 'f': snprintf(def, sizeof(def), "  [%g]", *(float*)o.p); break;
-            case 'b': break;   // a flag's default is "not set"
+            case 'b':
+            case 'o': break;   // a switch has no value to show
         }
         fprintf(f, "    %-24s %s%s\n", left, o.help, def);
     }
@@ -210,10 +233,12 @@ inline bool gl_parse_args(int argc, char ** argv, gl_opts & o, std::string * err
         for (const auto & d : tbl) {
             if (a != d.flag) continue;
             matched = true;
-            if (d.type == 'b') {
-                // --mtp-off inverts; the rest set their flag true.
-                bool * b = (bool *) d.p;
-                *b = (a == "--mtp-off") ? false : true;
+            // 'b' sets its flag, 'o' clears it. Spelled as a type rather
+            // than special-cased by name: the previous version hardcoded
+            // --mtp-off, so every later off-switch silently turned its
+            // feature ON instead.
+            if (d.type == 'b' || d.type == 'o') {
+                *(bool *) d.p = (d.type == 'b');
                 break;
             }
             if (i + 1 >= argc) { *err = a + " needs a value"; return false; }

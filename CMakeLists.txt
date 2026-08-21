@@ -240,7 +240,7 @@ set_target_properties(gl-offline PROPERTIES
 )
 
 enable_testing()
-foreach(t barge transcript)
+foreach(t barge transcript nod)
     add_executable(${t}-test tests/${t}_test.cpp)
     target_include_directories(${t}-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
     target_compile_features(${t}-test PRIVATE cxx_std_17)

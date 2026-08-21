@@ -338,6 +338,29 @@ struct VoiceSession::Impl {
 // callback fires at 48 kHz with the denoised output. `tts_samples` keeps
 // counting the 24 kHz native count — stats and timing stay in the native
 // rate domain (one canonical clock for the turn).
+std::vector<float> VoiceSession::synthesize(const std::string & text, std::string * err) {
+    std::vector<float> out;
+    if (!impl || !impl->tts_ctx) {
+        if (err) *err = "no TTS context";
+        return out;
+    }
+    int     n   = 0;
+    float * pcm = vibevoice_synthesize(impl->tts_ctx, text.c_str(), &n);
+    if (!pcm || n <= 0) {
+        if (pcm) free(pcm);
+        if (err) *err = "vibevoice_synthesize produced nothing for \"" + text + "\"";
+        return out;
+    }
+    const int rate = tts_sample_rate();
+    if (rate == GL_TTS_RATE) {
+        out.assign(pcm, pcm + n);
+    } else {
+        out = core_audio::resample_polyphase(pcm, n, GL_TTS_RATE, rate);
+    }
+    free(pcm);
+    return out;
+}
+
 void VoiceSession::Impl::tts_audio_bridge(const float * pcm, int n_samples, void * user) {
     auto * s = (VoiceSession::Impl *) user;
     if (!s || n_samples <= 0) return;

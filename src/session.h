@@ -24,6 +24,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 /* All capture audio fed to push_audio must be mono float32 at this rate. */
 constexpr int GL_MIC_RATE = 16000;
@@ -188,6 +189,22 @@ public:
 
     /* Rate on_audio fires at: GL_TTS_RATE, or 48000 when DFN loaded. */
     int tts_sample_rate() const;
+
+    /* One-shot text -> speech in the loaded voice, at tts_sample_rate().
+     * Empty on failure with *err set.
+     *
+     * For short fixed phrases that must play with no synthesis latency at
+     * all — backchannels, in particular, where the streaming path's ~335 ms
+     * time-to-first-audio would put the sound in the wrong place. Render
+     * once at startup, keep the samples, push them straight at the speaker.
+     *
+     * Uses the same context as the streaming path, so call it BETWEEN turns
+     * only; concurrent use with an open TTS stream is not supported.
+     *
+     * The DFN post-filter is NOT applied even when loaded — it is a
+     * streaming filter, and the output is only resampled to match. On the
+     * ~300 ms clips this exists for the difference is inaudible. */
+    std::vector<float> synthesize(const std::string & text, std::string * err);
 
     /* True when the MTP draft head loaded and generation is speculative.
      * False when MTP was disabled, had no path, or failed to load. */

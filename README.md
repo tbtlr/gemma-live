@@ -129,6 +129,8 @@ tune it. `--help` lists all of them with their defaults.
   kwd   --kwd-model --kwd-wake --kwd-step --kwd-window --kwd-gpu
         --kwd-ratio --kwd-floor --kwd-nogate --kwd-duck --kwd-debug
   vad   --vad-model --vad-silence --vad-debug
+  nod   --nod-off --nod-phrases --nod-after --nod-gap --nod-mono
+        --nod-per-turn --nod-len --nod-gain --nod-debug
   fup   --fup-timeout --fup-hops --fup-gate
   brg   --brg-ratio --brg-floor --brg-sustain --brg-debug
 ```
@@ -141,10 +143,53 @@ seeing, which is the fastest way to tell "correctly quiet" from "stuck".
 `--verbosity 2` restores the full ggml/llama diagnostics that are filtered out
 by default.
 
+## Backchannels
+
+Short "mm-hm" sounds while you are still talking, so a long turn does not
+happen into total silence. They never take the floor: no LLM call, nothing
+added to the KV cache, no state change — the turn carries on exactly as it
+would have.
+
+The trigger reuses evidence the system already computes. The keyword worker
+runs `ends_mid_thought()` on the rolling transcript to stretch the
+end-of-turn threshold from 500 ms to 900 ms when you pause on a word an
+English sentence cannot end on ("and", "because", "the"). That stretch is a
+window where the system has already decided you are not finished, which is
+exactly where a nod belongs. Two tiers fire:
+
+```
+confident   the transcript ends mid-thought
+monologue   no transcript evidence, but you have been talking past --nod-mono
+```
+
+Only the confident tier is safe enough to fire on short exchanges, and on
+its own it is so rare you would not notice the feature; the monologue tier
+is what makes it audible.
+
+A nod goes in early in a pause or not at all — before ~200 ms it clips a
+word you are still finishing, and after ~450 ms you are probably done and it
+is pure delay in front of the answer. Firing one also holds end-of-turn off
+until the clip finishes plus a beat, so the reply cannot land on top of the
+nod, and so you get the moment the nod just offered you.
+
+Clips are pre-rendered at startup in the assistant's own voice (~1.5 s of
+boot) and played from memory. The streaming path's ~335 ms time-to-first-
+audio is far too slow: a backchannel that late has missed the moment it was
+reacting to. They are trimmed, capped at `--nod-len`, and played at
+`--nod-gain` — at full level a nod does not read as a listener signal, it
+reads as an interruption.
+
+Getting a nod wrong is cheap. Fired at a real turn end it produces "Mm-hm.
+The capital of France is Paris.", which is how people talk. The failure that
+matters is firing mid-word, which is what the pause window guards against.
+
+`--nod-debug` logs every nod with its position and the transcript word that
+justified it, and every near miss with the reason it was rejected.
+
 ## Development
 
 ```bash
-cmake --build build --target gemma-live gl-offline barge-test transcript-test
+cmake --build build --target gemma-live gl-offline barge-test transcript-test nod-test
 cd build && ctest
 ```
 

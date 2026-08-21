@@ -16,6 +16,7 @@
 //
 #include "session.h"
 #include "barge.h"
+#include "nod.h"
 #include "opts.h"
 #include "transcript.h"
 #include "vqe.h"
@@ -45,6 +46,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <fstream>
 #include <mutex>
 #include <sstream>
@@ -110,6 +112,18 @@ struct cli_eou_vad {
     std::atomic<int> silence_threshold_ms{DEFAULT_SILENCE_MS};
     static constexpr int HANGING_SILENCE_MS = 900;
 
+    // Published for the backchannel trigger, which runs on the keyword
+    // worker thread and needs to know how long the user has been talking
+    // and how long the current pause is. Written here, read there.
+    std::atomic<int64_t> onset_ms      {0};   // 0 until the first voiced verdict
+    std::atomic<int64_t> last_voiced_ms{0};
+
+    // A nod that is still audible holds EOU off until it finishes, plus a
+    // beat. Saying "mm-hm" and then answering over the top of it is worse
+    // than not nodding at all — and the pause the user takes after being
+    // acknowledged is exactly the pause we just told them we were fine with.
+    std::atomic<int64_t> hold_until_ms{0};
+
     std::vector<float> window;
     bool   ever_voiced = false;
     std::chrono::steady_clock::time_point last_check;
@@ -129,6 +143,16 @@ struct cli_eou_vad {
         last_check     = std::chrono::steady_clock::now();
         last_voiced_at = std::chrono::steady_clock::now();
         silence_threshold_ms.store(DEFAULT_SILENCE_MS);
+        onset_ms.store(0);
+        last_voiced_ms.store(0);
+        hold_until_ms.store(0);
+    }
+
+    // steady_clock ms, matching mono_ms() — which is declared below this
+    // struct, so the conversion is spelled out rather than called.
+    static int64_t to_ms(std::chrono::steady_clock::time_point t) {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+            t.time_since_epoch()).count();
     }
     // True once feed() has seen at least one voiced VAD verdict.
 
@@ -187,14 +211,22 @@ struct cli_eou_vad {
             if (!ever_voiced) {
                 if (debug) fprintf(stderr, "  [vad: speech onset]\n");
                 ever_voiced = true;
+                onset_ms.store(to_ms(now));
             }
             last_voiced_at = now;
+            last_voiced_ms.store(to_ms(now));
         }
         if (ever_voiced) {
             const auto silence_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                 now - last_voiced_at).count();
             const int thresh = silence_threshold_ms.load();
             if (silence_ms >= thresh) {
+                const int64_t hold = hold_until_ms.load();
+                if (hold && to_ms(now) < hold) {
+                    if (debug) fprintf(stderr, "  [vad: EOU held %lld ms for a nod]\n",
+                                       (long long) (hold - to_ms(now)));
+                    return false;
+                }
                 if (debug) fprintf(stderr, "  [vad: EOU after %lld ms (thresh=%d)]\n",
                                    (long long) silence_ms, thresh);
                 return true;
@@ -698,6 +730,15 @@ struct cli_keyword_detector {
     barge_detector              * barge     = nullptr;
     cli_eou_vad                 * eou_vad   = nullptr;   // threshold target
 
+    // Backchannels ride this worker because it is the only place that has
+    // the rolling transcript, which is where the continuation evidence
+    // lives. It owns none of them — main.cpp does.
+    // The worker owns the DECISION; main.cpp owns the audio. fire_nod plays
+    // one clip and returns its length in ms (0 if it could not).
+    nod_detector                * nod = nullptr;
+    std::function<int()>          fire_nod;
+    int                           nod_last_verdict = -1;   // debug de-duplication
+
     bool init(const char * model_path, const char * wake_path) {
         gate_rms = std::pow(10.0f, gate_dbfs / 20.0f);
         preroll.reserve(16000);
@@ -888,11 +929,52 @@ struct cli_keyword_detector {
                     // finished. Costs nothing when we are wrong; saves a whole
                     // wasted turn when we are right, because a truncated
                     // question means a useless answer and a restart.
-                    const int ms = transcript::ends_mid_thought(norm)
+                    const bool mid_thought = transcript::ends_mid_thought(norm);
+                    const int ms = mid_thought
                         ? cli_eou_vad::HANGING_SILENCE_MS
                         : cli_eou_vad::DEFAULT_SILENCE_MS;
                     if (eou_vad->silence_threshold_ms.exchange(ms) != ms && debug) {
                         fprintf(stderr, "  [kwd: eou threshold -> %d ms]\n", ms);
+                    }
+
+                    // Backchannel. Same evidence, one step further: the
+                    // threshold above says "do not answer yet", and a nod is
+                    // what a person does with that moment instead of going
+                    // silent. Evaluated here because this is the only thread
+                    // holding the rolling transcript.
+                    if (nod && fire_nod) {
+                        const int64_t now   = mono_ms();
+                        const int64_t onset = eou_vad->onset_ms.load();
+                        nod_detector::state ns;
+                        ns.now_ms       = now;
+                        ns.utterance_ms = onset ? (int) (now - onset) : 0;
+                        ns.silence_ms   = onset
+                            ? (int) (now - eou_vad->last_voiced_ms.load()) : 0;
+                        ns.mid_thought  = mid_thought;
+
+                        const auto v = nod->evaluate(ns);
+                        if (v == nod_detector::verdict::fire) {
+                            const int clip_ms = fire_nod();
+                            if (clip_ms > 0) {
+                                nod->note_fired(now, clip_ms);
+                                // Hold EOU past the clip plus a beat, so the
+                                // answer cannot land on top of the nod and the
+                                // user gets the moment we just offered them.
+                                eou_vad->hold_until_ms.store(now + clip_ms + 400);
+                                if (nod->debug) {
+                                    fprintf(stderr, "  [nod: fired at %d ms in, "
+                                            "%d ms pause, %s | \"%s\"]\n",
+                                            ns.utterance_ms, ns.silence_ms,
+                                            mid_thought ? "mid-thought" : "monologue",
+                                            transcript::last_word(norm).c_str());
+                                }
+                            }
+                        } else if (nod->debug && (int) v != nod_last_verdict) {
+                            // Only on change: this runs every kwd step, and
+                            // the steady state is one reason repeating.
+                            fprintf(stderr, "  [nod: %s]\n", nod_detector::name(v));
+                        }
+                        nod_last_verdict = (int) v;
                     }
                 }
             }
@@ -928,6 +1010,8 @@ static bool                 g_voice_vad_inited = false;
 // Barge-in during REPLYING. Always available — unlike the VADs it needs no
 // model, just the AEC residual.
 static barge_detector       g_barge;
+static nod_detector         g_nod;
+static nod_pool             g_nod_clips;
 
 // ────────────────────────────────────────────────────────────────────────
 // Mic capture — feeds the AEC capture buffer, and the raw PCM queue during
@@ -1372,6 +1456,14 @@ int main(int argc, char ** argv) {
     g_barge.sustain_hops = std::max(1, O.brg_sustain / 10);
     g_barge.debug        = O.brg_debug;
     g_barge.init();
+    g_kwd.nod = &g_nod;
+    g_kwd.fire_nod = [&playback_ring, tts_rate]() -> int {
+        if (g_nod_clips.empty()) return 0;
+        const std::vector<float> & clip = g_nod_clips.pick();
+        playback_ring.push(clip.data(), clip.size());
+        return (int) (clip.size() * 1000 / (size_t) tts_rate);
+    };
+
     g_barge.on_fire = []() {
         if (g_voice_activity.exchange(true)) return;
         g_interrupted.store(true);
@@ -1383,6 +1475,62 @@ int main(int argc, char ** argv) {
     g_kwd.eou_vad = &g_eou_vad;
     fprintf(stderr, "brg      residual energy, %.1fx floor, %d ms sustained\n",
             g_barge.ratio, g_barge.sustain_hops * 10);
+
+    // ---- Backchannels ----
+    //
+    // Rendered once here rather than on demand: the streaming path's ttfa is
+    // ~335 ms, and a nod that late has missed the moment it was reacting to.
+    // Playing cached PCM costs only the device buffer.
+    g_nod.enabled          = O.nod_on;
+    g_nod.min_utterance_ms = O.nod_after;
+    g_nod.gap_ms           = O.nod_gap;
+    g_nod.monologue_ms     = O.nod_monologue;
+    g_nod.max_per_turn     = std::max(1, O.nod_per_turn);
+    g_nod.debug            = O.nod_debug;
+
+    if (g_nod.enabled) {
+        const int64_t t0 = mono_ms();
+        std::vector<std::string> phrases;
+        {
+            std::stringstream ss(O.nod_phrases);
+            std::string item;
+            while (std::getline(ss, item, ',')) {
+                while (!item.empty() && item.front() == ' ') item.erase(item.begin());
+                while (!item.empty() && item.back()  == ' ') item.pop_back();
+                if (!item.empty()) phrases.push_back(item);
+            }
+        }
+        int shortest = 0, longest = 0;
+        for (const auto & phrase : phrases) {
+            std::string serr;
+            std::vector<float> pcm = session->synthesize(phrase, &serr);
+            if (pcm.empty()) {
+                fprintf(stderr, "  [nod: could not render \"%s\" — %s]\n",
+                        phrase.c_str(), serr.c_str());
+                continue;
+            }
+            trim_silence(pcm, tts_rate);
+            cap_length(pcm, tts_rate, O.nod_len);
+            // Backchannels are quieter than speech. At full level a nod does
+            // not read as a listener signal at all — it reads as the
+            // assistant interrupting.
+            for (float & v : pcm) v *= O.nod_gain;
+            const int ms = (int) (pcm.size() * 1000 / (size_t) tts_rate);
+            if (g_nod.debug) fprintf(stderr, "  [nod: \"%s\" -> %d ms]\n", phrase.c_str(), ms);
+            shortest = shortest ? std::min(shortest, ms) : ms;
+            longest  = std::max(longest, ms);
+            g_nod_clips.clips.push_back(std::move(pcm));
+        }
+        if (g_nod_clips.empty()) {
+            g_nod.enabled = false;
+            fprintf(stderr, "nod      DISABLED — nothing rendered\n");
+        } else {
+            fprintf(stderr, "nod      %zu clips, %d-%d ms, %.0f%% level, "
+                            "after %d ms, %d ms apart (%lld ms to render)\n",
+                    g_nod_clips.clips.size(), shortest, longest, O.nod_gain * 100.0f,
+                    O.nod_after, O.nod_gap, (long long) (mono_ms() - t0));
+        }
+    }
 
     // Start the always-on workers now that everything they depend on exists.
     // Tell AEC how to decimate the render-side reference: 24 kHz normally,
@@ -1486,6 +1634,7 @@ int main(int argc, char ** argv) {
             g_interrupted.store(false);
             g_voice_activity.store(false);
             g_eou_vad.reset();
+            g_nod.reset();          // the per-turn budget is per turn
 
             if (!session->begin_turn()) {
                 fprintf(stderr, "ERR: begin_turn: %s\n", session->last_error().c_str());
