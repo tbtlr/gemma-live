@@ -130,7 +130,7 @@ tune it. `--help` lists all of them with their defaults.
         --kwd-ratio --kwd-floor --kwd-nogate --kwd-duck --kwd-debug
   vad   --vad-model --vad-silence --vad-debug
   nod   --nod-off --nod-phrases --nod-after --nod-gap --nod-mono
-        --nod-per-turn --nod-len --nod-gain --nod-debug
+        --nod-per-turn --nod-len --nod-gain --nod-debug --nod-dump
   fup   --fup-timeout --fup-hops --fup-gate
   brg   --brg-ratio --brg-floor --brg-sustain --brg-debug
 ```
@@ -185,6 +185,15 @@ matters is firing mid-word, which is what the pause window guards against.
 
 `--nod-debug` logs every nod with its position and the transcript word that
 justified it, and every near miss with the reason it was rejected.
+
+Phrases can only really be judged by ear, so `--nod-dump DIR` renders the
+current `--nod-phrases` to WAV and exits without opening the microphone.
+What lands on disk is what reaches the speaker — trimmed, capped, and at
+`--nod-gain`, so the files are deliberately quiet.
+
+```bash
+./build/gemma-live --nod-phrases "Mm-hm.,Sure.,Okay." --nod-dump /tmp/nods
+```
 
 ## Development
 

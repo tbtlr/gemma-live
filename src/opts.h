@@ -76,6 +76,7 @@ struct gl_opts {
     int         nod_len       = 450;
     float       nod_gain      = 0.45f;
     bool        nod_debug     = false;
+    std::string nod_dump;
 
     int         fup_timeout = 5000;
     int         fup_hops    = 3;
@@ -152,6 +153,7 @@ inline std::vector<gl_opt_def> gl_option_table(gl_opts & o) {
       {"--nod-len",     'i', &o.nod_len,     "MS",   "cap on clip length (0 = uncapped)"},
       {"--nod-gain",    'f', &o.nod_gain,    "X",    "level relative to speech"},
       {"--nod-debug",   'b', &o.nod_debug,   nullptr,"log every nod and every near miss"},
+      {"--nod-dump",    's', &o.nod_dump,    "DIR",  "write the rendered clips there as WAV and exit"},
 
       {"--fup-timeout", 'i', &o.fup_timeout, "MS",   "how long the follow-up window stays open"},
       {"--fup-hops",    'i', &o.fup_hops,    "N",    "100 ms hops of voice needed to continue"},

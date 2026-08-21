@@ -1009,6 +1009,33 @@ static bool                 g_voice_vad_inited = false;
 
 // Barge-in during REPLYING. Always available — unlike the VADs it needs no
 // model, just the AEC residual.
+// Write mono float samples as a 16-bit PCM WAV. Exists for --nod-dump:
+// backchannel phrases can only really be judged by ear, and there is
+// otherwise no way to hear what a given --nod-phrases setting produced
+// short of holding a conversation with it.
+static bool write_wav(const std::string & path, const std::vector<float> & pcm, int rate) {
+    FILE * f = fopen(path.c_str(), "wb");
+    if (!f) return false;
+    const uint32_t n_bytes = (uint32_t) (pcm.size() * 2);
+    const uint32_t riff    = 36 + n_bytes;
+    const uint16_t ch = 1, bits = 16, fmt = 1;
+    const uint32_t srate = (uint32_t) rate, brate = srate * 2;
+    const uint16_t align = 2, sub1 = 16;
+    fwrite("RIFF", 1, 4, f);  fwrite(&riff,  4, 1, f);
+    fwrite("WAVEfmt ", 1, 8, f); fwrite(&sub1, 4, 1, f);
+    fwrite(&fmt, 2, 1, f);   fwrite(&ch,    2, 1, f);
+    fwrite(&srate, 4, 1, f); fwrite(&brate, 4, 1, f);
+    fwrite(&align, 2, 1, f); fwrite(&bits,  2, 1, f);
+    fwrite("data", 1, 4, f); fwrite(&n_bytes, 4, 1, f);
+    for (float v : pcm) {
+        v = v > 1.0f ? 1.0f : (v < -1.0f ? -1.0f : v);
+        const int16_t s16 = (int16_t) lrintf(v * 32767.0f);
+        fwrite(&s16, 2, 1, f);
+    }
+    fclose(f);
+    return true;
+}
+
 static barge_detector       g_barge;
 static nod_detector         g_nod;
 static nod_pool             g_nod_clips;
@@ -1517,9 +1544,26 @@ int main(int argc, char ** argv) {
             for (float & v : pcm) v *= O.nod_gain;
             const int ms = (int) (pcm.size() * 1000 / (size_t) tts_rate);
             if (g_nod.debug) fprintf(stderr, "  [nod: \"%s\" -> %d ms]\n", phrase.c_str(), ms);
+            if (!O.nod_dump.empty()) {
+                // Slug the phrase so "Mm-hm." becomes a usable filename.
+                std::string slug;
+                for (char c : phrase) {
+                    if (isalnum((unsigned char) c)) slug += (char) tolower((unsigned char) c);
+                    else if (!slug.empty() && slug.back() != '-') slug += '-';
+                }
+                while (!slug.empty() && slug.back() == '-') slug.pop_back();
+                const std::string out = O.nod_dump + "/nod-" + slug + ".wav";
+                fprintf(stderr, "  [nod: wrote %s (%d ms)]\n",
+                        write_wav(out, pcm, tts_rate) ? out.c_str() : "FAILED", ms);
+            }
             shortest = shortest ? std::min(shortest, ms) : ms;
             longest  = std::max(longest, ms);
             g_nod_clips.clips.push_back(std::move(pcm));
+        }
+        if (!O.nod_dump.empty()) {
+            fprintf(stderr, "\nwrote %zu clip(s) to %s\n",
+                    g_nod_clips.clips.size(), O.nod_dump.c_str());
+            return 0;
         }
         if (g_nod_clips.empty()) {
             g_nod.enabled = false;
