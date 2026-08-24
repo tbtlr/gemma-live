@@ -121,6 +121,11 @@ footer { flex: none; padding: 10px 16px calc(22px + env(safe-area-inset-bottom))
   background-color: var(--muted); color: var(--muted-foreground); opacity: 1;
 }
 .icon.filled:disabled:hover { background-color: var(--muted); opacity: 1; }
+/* One affordance at a time: the composer offers voice until you type, then
+   offers send. Two buttons side by side made you choose before you had
+   decided anything. */
+#composer.typing #mic         { display: none; }
+#composer:not(.typing) #send  { display: none; }
 
 /* ── voice overlay ────────────────────────────────────────────────── */
 #voice {
@@ -160,7 +165,7 @@ footer { flex: none; padding: 10px 16px calc(22px + env(safe-area-inset-bottom))
 <footer>
   <form id="composer">
     <textarea id="box" rows="1" placeholder="Ask anything" autocomplete="off"></textarea>
-    <button type="button" class="icon" id="mic" title="Voice mode" aria-label="Voice mode">
+    <button type="button" class="icon filled" id="mic" title="Voice mode" aria-label="Voice mode">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
            stroke-width="2" stroke-linecap="round">
         <path d="M3 12h1M7 8v8M11 4v16M15 7v10M19 10v4M21 12h0"/>
@@ -274,7 +279,12 @@ const box = $('#box');
 function sync() {
   box.style.height = 'auto';
   box.style.height = Math.min(box.scrollHeight, window.innerHeight * 0.4) + 'px';
-  $('#send').disabled = busy || !box.value.trim();
+  const typed = !!box.value.trim();
+  $('#composer').classList.toggle('typing', typed);
+  $('#send').disabled = busy || !typed;
+  // Voice is unavailable mid-reply: the session takes one turn at a time, so
+  // offering it would only queue behind the answer being written.
+  $('#mic').disabled = busy;
 }
 box.addEventListener('input', sync);
 box.addEventListener('keydown', e => {
