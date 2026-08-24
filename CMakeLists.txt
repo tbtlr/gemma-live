@@ -36,6 +36,8 @@ add_subdirectory(${GL_LLAMA_DIR} ${CMAKE_BINARY_DIR}/llama.cpp)
 
 find_package(Threads REQUIRED)
 
+if (APPLE)   # macOS: dyld two-level-namespace ggml isolation via install_name_tool
+
 # ─────────────────────────────────────────────────────────────────────────
 # CrispASR linkage with ggml-symbol isolation
 #
@@ -117,6 +119,19 @@ if (NOT EXISTS ${CRISPASR_SRC})
         "Build it first: cd ${GL_CRISPASR_DIR} && cmake -B build -S . && cmake --build build --target crispasr-tts")
 endif()
 
+else()   # Linux: libcrispasr-tts.so is self-contained (static ggml + hidden
+         # symbols via -Wl,--exclude-libs,ALL), so there is nothing to isolate.
+    set(CRISPASR_DST         "${GL_CRISPASR_DIR}/build-static/src/libcrispasr-tts.so")
+    set(CRISPASR_PATCHED_DIR "${GL_CRISPASR_DIR}/build-static/src")
+    if (NOT EXISTS "${CRISPASR_DST}")
+        message(FATAL_ERROR "libcrispasr-tts.so not found at ${CRISPASR_DST}. Build it: "
+            "cd ${GL_CRISPASR_DIR} && cmake -B build-static -DBUILD_SHARED_LIBS=OFF -DGGML_CUDA=ON "
+            "-DCMAKE_CUDA_ARCHITECTURES=87 -DCMAKE_SHARED_LINKER_FLAGS=-Wl,--exclude-libs,ALL && "
+            "cmake --build build-static --target crispasr-tts")
+    endif()
+    add_custom_target(crispasr_patched)   # no-op
+endif()
+
 # ─────────────────────────────────────────────────────────────────────────
 # LocalVQE — neural AEC + noise suppression, built out-of-tree by
 # tools/build_localvqe.sh into ONE dylib that exports only the localvqe_* C
@@ -126,7 +141,7 @@ endif()
 # ─────────────────────────────────────────────────────────────────────────
 set(LOCALVQE_DIR ${CMAKE_BINARY_DIR}/localvqe-libs)
 set(LOCALVQE_LIB ${LOCALVQE_DIR}/liblocalvqe.dylib)
-if (NOT EXISTS ${LOCALVQE_LIB})
+if (APPLE AND NOT EXISTS ${LOCALVQE_LIB})
     message(FATAL_ERROR
         "LocalVQE dylib not found at ${LOCALVQE_LIB}.\n"
         "First-time setup:\n"
@@ -189,6 +204,7 @@ set(GL_RPATH "${CRISPASR_PATCHED_DIR}")
 #   src/main.cpp — miniaudio mic/speaker, the AEC chain, wake word, EOU VAD,
 #                  the turn state machine.
 # ─────────────────────────────────────────────────────────────────────────
+if (APPLE)   # gemma-live (miniaudio mic/speaker + LocalVQE) is macOS-only
 add_executable(gemma-live src/main.cpp)
 
 target_include_directories(gemma-live PRIVATE
@@ -220,6 +236,7 @@ if (APPLE)
 elseif (UNIX)
     target_link_libraries(gemma-live PRIVATE ${CMAKE_DL_LIBS})
 endif()
+endif()   # APPLE: gemma-live
 
 # ─────────────────────────────────────────────────────────────────────────
 # Development targets.
@@ -253,6 +270,9 @@ set_target_properties(gl-offline PROPERTIES
 add_executable(gl-serve src/realtime.cpp)
 target_include_directories(gl-serve PRIVATE ${GL_LLAMA_DIR}/vendor)   # nlohmann/json.hpp
 target_link_libraries(gl-serve PRIVATE gl-session)
+if (NOT APPLE)
+    target_link_libraries(gl-serve PRIVATE crypto)   # OpenSSL SHA1 for the WebSocket handshake (ws.h)
+endif()
 set_target_properties(gl-serve PROPERTIES
     BUILD_RPATH   "${GL_RPATH}"
     INSTALL_RPATH "${GL_RPATH}"

@@ -12,7 +12,23 @@
 // on one thread without a second thread or a poll abstraction.
 #pragma once
 
+#ifdef __APPLE__
 #include <CommonCrypto/CommonDigest.h>   // CC_SHA1 — libSystem, no link flag
+#else
+#include <openssl/sha.h>                 // Linux: OpenSSL provides SHA1
+#define CC_SHA1_DIGEST_LENGTH SHA_DIGEST_LENGTH
+#define CC_LONG size_t
+#define CC_SHA1(d, n, md) SHA1((const unsigned char *)(d), (size_t)(n), (md))
+#endif
+
+// SIGPIPE avoidance: macOS uses per-socket SO_NOSIGPIPE (set below); Linux/BSD
+// use the MSG_NOSIGNAL send flag instead. Either way send() returns EPIPE
+// rather than killing the process when the peer has vanished.
+#ifdef MSG_NOSIGNAL
+#define WS_SEND_FLAGS MSG_NOSIGNAL
+#else
+#define WS_SEND_FLAGS 0
+#endif
 #include <arpa/inet.h>
 #include <cstdint>
 #include <cstring>
@@ -102,7 +118,7 @@ inline int listen_on(const char * host, int port, std::string * err) {
 inline bool send_all(int fd, const void * data, size_t n) {
     const auto * p = (const uint8_t *) data;
     while (n) {
-        const ssize_t k = ::send(fd, p, n, 0);
+        const ssize_t k = ::send(fd, p, n, WS_SEND_FLAGS);
         if (k <= 0) { if (errno == EINTR) continue; return false; }
         p += k; n -= (size_t) k;
     }
@@ -318,7 +334,9 @@ inline hs handshake(int fd, request * out, std::string * err) {
     // default disposition kills the process — a client pressing Ctrl+C
     // mid-reply would take the server down with it. send() returns EPIPE
     // instead, which the framing layer reports as a dead connection.
+#ifdef SO_NOSIGPIPE
     setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
+#endif
     return hs::upgraded;
 }
 
