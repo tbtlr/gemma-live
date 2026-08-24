@@ -131,6 +131,7 @@ tune it. `--help` lists all of them with their defaults.
   vad   --vad-model --vad-silence --vad-empty --vad-debug
   nod   --nod-off --nod-phrases --nod-after --nod-gap --nod-mono
         --nod-per-turn --nod-len --nod-gain --nod-debug --nod-dump
+  stt   --stt-model --stt-threads                  (gl-serve only)
   rt    --rt-host --rt-port                        (gl-serve only)
   fup   --fup-timeout --fup-hops --fup-gate
   brg   --brg-ratio --brg-floor --brg-sustain --brg-debug
@@ -254,6 +255,43 @@ every turn and cost more the longer you talk — which is also why this is
 not `/v1/chat/completions`, whose schema is stateless by definition and
 would invite exactly that.
 
+### Dictation
+
+`POST /api/transcribe` turns speech into text without taking a conversation
+turn — the microphone-into-the-input-box gesture, as distinct from voice
+mode.
+
+```bash
+curl -X POST http://127.0.0.1:8927/api/transcribe \
+     -H 'content-type: application/json' \
+     -d '{"audio":"<base64 pcm16>","rate":24000}'
+# {"text":"What is the capital of France?","seconds":1.64,"chunks":1}
+```
+
+Nothing enters the KV cache and the model never sees it. That separation is
+the point: dictation fills a box the user then edits and may never send, so
+it must not be able to change what the assistant believes was said. It is a
+different model for the same reason — Gemma consumes audio as tokens and
+never emits a transcript of it, so asking Gemma would mean running a real
+turn and rolling it back. Moonshine sits entirely outside the conversation,
+and `/api/transcribe` deliberately does not take the turn lock, so dictating
+never queues behind a spoken reply.
+
+Single-shot by design. For ChatGPT's live partials, call it repeatedly on
+the growing buffer: re-transcribing from the start each time is what keeps
+the text stable instead of jittering as a window slides. Cost is ~0.12x
+realtime (1.6 s of audio in ~200 ms), so poll around 1 Hz and expect the
+call to lengthen as the recording does.
+
+Audio longer than 6 s is split and transcribed in pieces, cut at the
+quietest frame near the boundary so the seam lands in a pause. This is not
+tidiness: moonshine-streaming-tiny transcribes cleanly to about 7.6 s and
+past that **silently truncates** — a 12 s clip came back with exactly its
+first 7.6 s, no error and no marker, which is the worst thing a dictation
+box can do. With the split, 12 s of speech with natural pauses transcribes
+in full across three chunks. Speech with no pauses at all still seams
+imperfectly; the model is 32 MB, and `--stt-model` takes a bigger one.
+
 ### What it deliberately does not do
 
 **One session at a time.** `VoiceSession` owns a single llama context and is
@@ -261,11 +299,12 @@ not thread-safe, so a second conversation would need a second copy of every
 model. A client arriving while another is connected gets close code 1013
 rather than an unbounded wait.
 
-**No input transcription.** `input_audio_transcription` is reported as
-`null`, because Gemma consumes audio as tokens through the mtmd encoder and
-never produces a transcript of the user's speech. Output transcription works
-— those are the sampled tokens, streamed as
-`response.output_audio_transcript.delta`.
+**No input transcription in the voice session.** `input_audio_transcription`
+is reported as `null`, because Gemma consumes audio as tokens through the
+mtmd encoder and never produces a transcript of the user's speech. Output
+transcription works — those are the sampled tokens, streamed as
+`response.output_audio_transcript.delta`. For a transcript of the *user*,
+use `/api/transcribe` above; it is a separate model and a separate request.
 
 **Session-fixed fields.** `instructions`, `voice`, `temperature` and
 `max_response_output_tokens` belong to the loaded `VoiceSession` and are set

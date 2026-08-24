@@ -53,6 +53,10 @@
 
 #include "nlohmann/json.hpp"
 
+extern "C" {
+#include "moonshine_streaming.h"
+}
+
 #include "opts.h"
 #include "session.h"
 #include "vad.h"
@@ -541,6 +545,145 @@ static void serve_client(int fd, VoiceSession & vs, const gl_opts & O) {
     vs.on_audio = nullptr;
 }
 
+// ── dictation ───────────────────────────────────────────────────────────
+//
+// POST /api/transcribe  {"audio": "<base64 pcm16>", "rate": 24000}
+//                    -> {"text": "..."}
+//
+// Speech to text with NO conversation turn: the audio is transcribed and
+// thrown away, nothing enters the KV cache, and the model never sees it.
+// That separation is the whole point — dictation fills a text box that the
+// user then edits and may never send, so it must not be able to change what
+// the assistant thinks was said.
+//
+// It is a different model for the same reason. Gemma consumes audio as
+// tokens through the mtmd encoder and never emits a transcript of it, so
+// asking Gemma would mean running a real turn and rolling it back. Moonshine
+// is small, fast, and completely outside the conversation.
+//
+// Single-shot by design. A UI that wants ChatGPT's live partials calls this
+// repeatedly on the growing buffer — re-transcribing from the start each
+// time, which is what makes the text stable rather than jittering as a
+// rolling window slides. Cost grows with the recording, so poll at ~1 Hz,
+// not per frame.
+struct stt_engine {
+    moonshine_streaming_context * ctx = nullptr;
+    std::mutex mu;                 // one context, and requests can overlap
+
+    bool init(const std::string & path, int threads, int verbosity) {
+        if (path.empty()) return false;
+        auto params = moonshine_streaming_context_default_params();
+        params.n_threads   = threads > 0 ? threads : 2;
+        params.verbosity   = verbosity >= 2 ? 1 : 0;
+        params.use_gpu     = false;
+        params.temperature = 0.0f;     // greedy: dictation wants repeatable
+        ctx = moonshine_streaming_init_from_file(path.c_str(), params);
+        return ctx != nullptr;
+    }
+    void shutdown() {
+        if (ctx) { moonshine_streaming_free(ctx); ctx = nullptr; }
+    }
+    // Longest audio handed to the model in one call.
+    //
+    // Measured, not guessed: moonshine-streaming-tiny transcribes cleanly up
+    // to ~7.6 s, and past that it SILENTLY TRUNCATES — a 12 s clip came back
+    // with exactly the transcript of its first 7.6 s, no error, no marker.
+    // That is the worst failure a dictation box can have, so anything longer
+    // is split rather than passed through and quietly shortened.
+    static constexpr double MAX_CHUNK_S = 6.0;
+    // How far back from the cap to hunt for a quiet frame to cut on.
+    static constexpr double SEARCH_S    = 1.5;
+
+    std::string transcribe_one(const float * pcm, size_t n) {
+        if (!ctx || n == 0) return {};
+        char * t = moonshine_streaming_transcribe(ctx, pcm, (int) n);
+        if (!t) return {};
+        std::string out(t);
+        free(t);
+        return out;
+    }
+
+    // Split point for a chunk starting at `from`: the quietest 20 ms frame in
+    // the window before the cap, so the cut lands in a pause rather than
+    // through the middle of a word.
+    static size_t split_at(const std::vector<float> & pcm, size_t from, int rate) {
+        const size_t cap = from + (size_t) (MAX_CHUNK_S * rate);
+        if (cap >= pcm.size()) return pcm.size();
+        const size_t search_from = cap - (size_t) (SEARCH_S * rate);
+        const size_t frame = (size_t) (0.02 * rate);
+        size_t best = cap;
+        double best_rms = 1e9;
+        for (size_t at = search_from; at + frame <= cap; at += frame) {
+            double sum = 0;
+            for (size_t i = at; i < at + frame; i++) sum += (double) pcm[i] * pcm[i];
+            const double rms = std::sqrt(sum / (double) frame);
+            if (rms < best_rms) { best_rms = rms; best = at + frame / 2; }
+        }
+        return best;
+    }
+
+    // 16 kHz mono float in, UTF-8 out. Returns the number of model calls in
+    // *n_chunks so the caller can report it.
+    std::string transcribe(const std::vector<float> & pcm, int rate, int * n_chunks) {
+        std::lock_guard<std::mutex> lk(mu);
+        *n_chunks = 0;
+        if (!ctx || pcm.empty()) return {};
+
+        std::string out;
+        size_t from = 0;
+        while (from < pcm.size()) {
+            const size_t to = split_at(pcm, from, rate);
+            const std::string part = transcribe_one(pcm.data() + from, to - from);
+            (*n_chunks)++;
+            if (!part.empty()) {
+                if (!out.empty() && out.back() != ' ') out += ' ';
+                out += part;
+            }
+            if (to <= from) break;            // no forward progress: bail
+            from = to;
+        }
+        return out;
+    }
+};
+
+static stt_engine g_stt;
+
+static void serve_transcribe(int fd, const std::string & body) {
+    if (!g_stt.ctx) {
+        ws::send_http(fd, "503 Service Unavailable", "application/json",
+                      json({{"error", "dictation is not available: no --stt-model loaded"}}).dump());
+        return;
+    }
+    std::string b64;
+    int rate = 24000;
+    try {
+        const auto j = json::parse(body);
+        b64  = j.value("audio", "");
+        rate = j.value("rate", 24000);
+    } catch (const std::exception & e) {
+        ws::send_http(fd, "400 Bad Request", "application/json",
+                      json({{"error", std::string("bad json: ") + e.what()}}).dump());
+        return;
+    }
+    std::vector<uint8_t> bytes;
+    if (b64.empty() || !ws::b64_decode(b64, bytes) || bytes.size() < 2 || rate <= 0) {
+        ws::send_http(fd, "400 Bad Request", "application/json",
+                      json({{"error", "audio must be base64 pcm16 and rate must be positive"}}).dump());
+        return;
+    }
+
+    std::vector<float> f, pcm16k;
+    pcm16_to_float(bytes, f);
+    resample_linear(f, rate, GL_MIC_RATE, pcm16k);   // moonshine wants 16 kHz
+
+    int n_chunks = 0;
+    const std::string text = g_stt.transcribe(pcm16k, GL_MIC_RATE, &n_chunks);
+    ws::send_http(fd, "200 OK", "application/json",
+                  json({{"text", text},
+                        {"seconds", (double) pcm16k.size() / GL_MIC_RATE},
+                        {"chunks", n_chunks}}).dump());
+}
+
 // POST /api/chat  {"message": "..."}  ->  text/event-stream
 //
 // One message per request rather than the whole transcript: the model keeps
@@ -567,6 +710,7 @@ static void serve_chat(int fd, VoiceSession & vs, const std::string & body) {
 
     const char * head =
         "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n"
+        "Access-Control-Allow-Origin: *\r\n"
         "Cache-Control: no-store\r\nConnection: close\r\n\r\n";
     if (!ws::send_all(fd, head, strlen(head))) return;
 
@@ -603,7 +747,7 @@ int main(int argc, char ** argv) {
     signal(SIGPIPE, SIG_IGN);
 
     gl_opts O;
-    const std::vector<std::string> groups = {"llm", "sys", "mtp", "tts", "dfn", "vad", "rt"};
+    const std::vector<std::string> groups = {"llm", "sys", "mtp", "tts", "dfn", "vad", "stt", "rt"};
     {
         std::string err;
         if (!gl_parse_args(argc, argv, O, &err, groups)) {
@@ -652,6 +796,13 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
+    // Dictation is optional: a missing model costs the /api/transcribe route,
+    // not the server.
+    if (!g_stt.init(O.stt_model, O.stt_threads, O.verbosity) && O.verbosity > 0) {
+        fprintf(stderr, "stt      DISABLED — could not load %s\n",
+                O.stt_model.empty() ? "(no model set)" : O.stt_model.c_str());
+    }
+
     const int lfd = ws::listen_on(O.rt_host.c_str(), O.rt_port, &err);
     if (lfd < 0) {
         fprintf(stderr, "ERR: %s\n", err.c_str());
@@ -668,8 +819,12 @@ int main(int argc, char ** argv) {
 
     if (O.verbosity > 0) {
         fprintf(stderr, "\ngl-serve ready.\n");
-        fprintf(stderr, "  ws://%s:%d/v1/realtime   voice session\n", O.rt_host.c_str(), O.rt_port);
-        fprintf(stderr, "  http://%s:%d/api/chat    text chat\n", O.rt_host.c_str(), O.rt_port);
+        fprintf(stderr, "  ws://%s:%d/v1/realtime        voice session\n", O.rt_host.c_str(), O.rt_port);
+        fprintf(stderr, "  http://%s:%d/api/chat         text chat\n", O.rt_host.c_str(), O.rt_port);
+        if (g_stt.ctx) {
+            fprintf(stderr, "  http://%s:%d/api/transcribe   dictation\n",
+                    O.rt_host.c_str(), O.rt_port);
+        }
         fprintf(stderr, "  pcm16 mono 24 kHz in and out, server_vad at %d ms\n\n",
                 O.vad_silence);
         fprintf(stderr, "Ctrl+C to quit.\n\n");
@@ -690,13 +845,29 @@ int main(int argc, char ** argv) {
         std::string herr;
         const ws::hs r = ws::handshake(fd, &req, &herr);
         if (r == ws::hs::plain_http) {
-            if (req.method == "POST" && req.path == "/api/chat") {
+            if (req.method == "OPTIONS") {
+                // CORS preflight for a cross-origin /api/chat fetch from a web UI.
+                const char * pf =
+                    "HTTP/1.1 204 No Content\r\n"
+                    "Access-Control-Allow-Origin: *\r\n"
+                    "Access-Control-Allow-Methods: POST, OPTIONS\r\n"
+                    "Access-Control-Allow-Headers: content-type\r\n"
+                    "Access-Control-Max-Age: 86400\r\n"
+                    "Content-Length: 0\r\nConnection: close\r\n\r\n";
+                ws::send_all(fd, pf, strlen(pf));
+            } else if (req.method == "POST" && req.path == "/api/chat") {
                 serve_chat(fd, *vs, req.body);
+            } else if (req.method == "POST" && req.path == "/api/transcribe") {
+                // Deliberately NOT under g_turn_mu: dictation runs a different
+                // model and touches no conversation state, so it must not
+                // queue behind a spoken reply.
+                serve_transcribe(fd, req.body);
             } else {
                 ws::send_http(fd, "426 Upgrade Required", "text/plain",
                               "gemma-live\n\n"
-                              "  ws  /v1/realtime   voice session (OpenAI Realtime)\n"
-                              "  POST /api/chat     {\"message\": \"...\"} -> SSE\n");
+                              "  ws   /v1/realtime      voice session (OpenAI Realtime)\n"
+                              "  POST /api/chat         {\"message\": \"...\"} -> SSE\n"
+                              "  POST /api/transcribe   {\"audio\": \"<base64 pcm16>\"} -> text\n");
             }
             close(fd);
             continue;
