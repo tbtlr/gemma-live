@@ -282,6 +282,24 @@ let playCursor = 0, sources = [], loudRun = 0;
 let speaking = false, voiceOn = false, muted = false, busy = false;
 let liveBot = null, wsResponding = false, httpSpeaking = false;
 
+// Per-turn timing as the page experiences it. The server logs its own half;
+// the difference between the two ttfa numbers is transport plus the
+// playback scheduler's lead, which is exactly what the server cannot see.
+let turnT0 = 0, turnFirstTok = 0, turnFirstAudio = 0;
+function turnMark(what) {
+  const t = performance.now();
+  if (what === 'start') { turnT0 = t; turnFirstTok = turnFirstAudio = 0; }
+  if (what === 'tok'   && !turnFirstTok)   turnFirstTok   = t;
+  if (what === 'audio' && !turnFirstAudio) turnFirstAudio = t;
+}
+function turnReport(kind) {
+  if (!turnT0) return;
+  const r = n => n ? Math.round(n - turnT0) + ' ms' : '—';
+  console.log(`[${kind}] ttft ${r(turnFirstTok)} | ttfa ${r(turnFirstAudio)}`
+            + ` | done ${r(performance.now())}`);
+  turnT0 = 0;
+}
+
 // ── thread ────────────────────────────────────────────────────────────
 function addMsg(who, text) {
   const e = $('#empty');
@@ -302,6 +320,7 @@ async function sendText(text) {
   if (busy) return;
   busy = true; sync();
   addMsg('user', text);
+  turnMark('start');
   const bot = addMsg('bot', '');
   const body = bot.querySelector('.body');
   body.classList.add('cursor');
@@ -325,8 +344,8 @@ async function sendText(text) {
         const line = buf.slice(0, i); buf = buf.slice(i + 2);
         if (!line.startsWith('data: ')) continue;
         const m = JSON.parse(line.slice(6));
-        if (m.delta) { body.textContent += m.delta; scroll(); }
-        if (m.audio && ctx) { httpSpeaking = true; enqueue(fromB64(m.audio)); }
+        if (m.delta) { turnMark('tok'); body.textContent += m.delta; scroll(); }
+        if (m.audio && ctx) { turnMark('audio'); httpSpeaking = true; enqueue(fromB64(m.audio)); }
         if (m.error) { body.textContent += '\n[' + m.error + ']'; }
         if (m.done) {
           const info = document.createElement('div');
@@ -340,6 +359,7 @@ async function sendText(text) {
     body.textContent += (body.textContent ? '\n' : '') + '[' + err.message + ']';
   } finally {
     body.classList.remove('cursor');
+    turnReport(voiceOn ? 'text spoken' : 'text');
     busy = false; sync(); scroll();
   }
 }
@@ -514,19 +534,25 @@ function connectWs() {
     const m = JSON.parse(ev.data);
     switch (m.type) {
       case 'input_audio_buffer.speech_started':
-      case 'input_audio_buffer.speech_stopped': break;   // the orb shows this
+      case 'input_audio_buffer.speech_stopped':
+        turnMark('start');                 // the server starts the turn here
+        break;
       case 'response.created':
         wsResponding = true;
+        if (!turnT0) turnMark('start');    // manual turn_detection: no speech_stopped
         liveBot = addMsg('bot', '');
         liveBot.querySelector('.body').classList.add('cursor');
         break;
       case 'response.output_audio_transcript.delta':
+        turnMark('tok');
         if (liveBot) liveBot.querySelector('.body').textContent += m.delta;
         break;
       case 'response.output_audio.delta':
+        turnMark('audio');
         enqueue(fromB64(m.delta)); break;
       case 'response.done':
         wsResponding = false;
+        turnReport('voice');
         endVoiceReply(false);
         break;
       case 'error':

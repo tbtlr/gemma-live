@@ -342,6 +342,30 @@ box can do. With the split, 12 s of speech with natural pauses transcribes
 in full across three chunks. Speech with no pauses at all still seams
 imperfectly; the model is 32 MB, and `--stt-model` takes a bigger one.
 
+### Turn stats
+
+`gl-serve` prints a line per turn at the default verbosity, in the same
+shape `gemma-live` uses, so numbers from the two front ends compare
+directly:
+
+```
+[voice       | enc 41 tok | llm 7 tok @ 65.8 tok/s | ttft 140 ms | ttfa 379 ms | tts 2.51 s | rtf 0.44 | mtp 4/4 acc 100% | turn 1279 ms]
+[text spoken | enc  0 tok | llm 5 tok @ 60.4 tok/s | ttft  56 ms | ttfa 266 ms | tts 1.61 s | rtf 0.55 | mtp 2/3 acc  67% | turn  950 ms]
+[text        | enc  0 tok | llm 5 tok @ 48.1 tok/s | ttft  57 ms                                      | mtp 2/4 acc  50% | turn  633 ms]
+```
+
+`ttft` is end of input to first sampled token, `ttfa` to the first audio
+byte written to the socket, `rtf` is synthesis wall time over audio produced
+(above 1 it cannot keep up), and `wait` appears when a turn blocked on the
+lock because the other front end was mid-turn.
+
+The page logs its own half to the browser console — `ttft`, `ttfa` and total
+as the browser experienced them. The gap between the two `ttfa` numbers is
+transport plus the playback scheduler's lead, which the server cannot see.
+Measured here it is a few milliseconds, so a web turn that feels slow is
+almost always the end-of-turn silence (`--vad-silence`, 500 ms by default)
+rather than the pipe.
+
 ### What it deliberately does not do
 
 **One session at a time.** `VoiceSession` owns a single llama context and is

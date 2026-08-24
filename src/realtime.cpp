@@ -40,6 +40,7 @@
 // echoes the real ones back in session.updated — a client can therefore see
 // what is actually in effect rather than being told its request was applied.
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <csignal>
 #include <cstdio>
@@ -124,6 +125,40 @@ static std::string new_id(const char * prefix) {
 // what keeps a typed message from being decoded into the middle of a spoken
 // turn.
 static std::mutex g_turn_mu;
+
+// One line per turn, in the same shape gemma-live prints, so numbers from
+// the two front ends can be compared directly.
+//
+//   wait  blocked on the turn lock — the other front end was mid-turn
+//   ttft  end of input to the first sampled token
+//   ttfa  end of input to the first audio byte written to the socket. This
+//         is the server's half of what the browser feels; the page logs its
+//         own, and the difference is transport plus playback scheduling.
+//   rtf   synthesis wall time over audio produced; >1 cannot keep up
+static void log_turn(const char * kind, const TurnStats & st, int tts_rate,
+                     double ms_wait, double ms_total, double ms_ttfa) {
+    const double tok_s   = st.ms_llm_gen > 0.0
+                         ? 1000.0 * (double) st.n_llm_tokens / st.ms_llm_gen : 0.0;
+    const double audio_s = tts_rate > 0 ? (double) st.n_tts_samples / tts_rate : 0.0;
+    const double rtf     = audio_s > 0.0 ? (st.ms_tts_wall / 1000.0) / audio_s : 0.0;
+
+    char mtp[64] = "";
+    if (st.n_drafted > 0) {
+        snprintf(mtp, sizeof(mtp), " | mtp %d/%d acc %.0f%%", st.n_accepted, st.n_drafted,
+                 100.0 * (double) st.n_accepted / (double) st.n_drafted);
+    }
+    char wait[32] = "";
+    if (ms_wait >= 1.0) snprintf(wait, sizeof(wait), " | wait %.0f ms", ms_wait);
+    char ttfa[32] = "";
+    if (ms_ttfa >= 0.0) snprintf(ttfa, sizeof(ttfa), " | ttfa %.0f ms", ms_ttfa);
+    char aud[48] = "";
+    if (audio_s > 0.0) snprintf(aud, sizeof(aud), " | tts %.2f s | rtf %.2f", audio_s, rtf);
+
+    fprintf(stderr, "[%s | enc %d tok | llm %d tok @ %.1f tok/s | ttft %.0f ms%s%s%s%s"
+                    " | turn %.0f ms]\n",
+            kind, st.n_audio_tokens, st.n_llm_tokens, tok_s, st.ms_ttft,
+            ttfa, aud, mtp, wait, ms_total);
+}
 
 // ── connection ──────────────────────────────────────────────────────────
 struct rt_conn {
@@ -226,6 +261,7 @@ struct rt_session {
     // last chunk. That is exactly why the socket is read on a separate
     // thread — response.cancel has to be able to arrive during this call.
     void run_turn() {
+        const auto t_enter = std::chrono::steady_clock::now();
         if (buf.empty()) {
             conn.send_error("invalid_request_error", "input_audio_buffer_commit_empty",
                             "no audio in the buffer to respond to");
@@ -258,6 +294,8 @@ struct rt_session {
             {"part", {{"type", "audio"}, {"transcript", ""}}}});
 
         std::lock_guard<std::mutex> lk(g_turn_mu);
+        const auto t_go = std::chrono::steady_clock::now();
+        first_audio_at  = {};
         std::string err;
         if (!vs.begin_turn() ||
             !vs.push_audio(buf.data(), buf.size())) {
@@ -292,6 +330,16 @@ struct rt_session {
                                                     {"transcript", transcript}}})}}}});
 
         const TurnStats & st = vs.last_stats();
+        if (O.verbosity > 0) {
+            auto ms = [](auto a, auto b) {
+                return std::chrono::duration<double, std::milli>(b - a).count();
+            };
+            const auto now = std::chrono::steady_clock::now();
+            log_turn(was_cancelled ? "voice interrupted" : "voice", st, out_rate,
+                     ms(t_enter, t_go), ms(t_enter, now),
+                     first_audio_at.time_since_epoch().count()
+                         ? ms(t_go, first_audio_at) : -1.0);
+        }
         send_event("response.done", {{"response",
             {{"id", resp_id}, {"object", "realtime.response"},
              {"status", was_cancelled ? "cancelled" : "completed"},
@@ -316,8 +364,13 @@ struct rt_session {
 
     // Fires on the TTS worker thread, and may fire briefly after the LLM is
     // done — rt_conn::send is mutexed for exactly this reason.
+    std::chrono::steady_clock::time_point first_audio_at{};
+
     void on_audio(const float * pcm, size_t n) {
         if (cancelled.load()) return;         // client already stopped playback
+        if (first_audio_at.time_since_epoch().count() == 0) {
+            first_audio_at = std::chrono::steady_clock::now();
+        }
         std::vector<float> src(pcm, pcm + n), rs;
         resample_linear(src, vs.tts_sample_rate(), out_rate, rs);
         std::vector<uint8_t> bytes;
@@ -736,7 +789,9 @@ static void serve_chat(int fd, VoiceSession & vs, const std::string & body) {
         return;
     }
 
+    const auto t_enter = std::chrono::steady_clock::now();
     std::lock_guard<std::mutex> lk(g_turn_mu);
+    const auto t_go = std::chrono::steady_clock::now();
 
     const char * head =
         "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n"
@@ -778,8 +833,12 @@ static void serve_chat(int fd, VoiceSession & vs, const std::string & body) {
     vs.on_token = [&](const char * t) { emit({{"delta", t}}); };
     vs.on_done  = nullptr;
     vs.on_audio = nullptr;
+    std::chrono::steady_clock::time_point first_audio{};
     if (speak) {
         vs.on_audio = [&](const float * pcm, size_t n) {
+            if (first_audio.time_since_epoch().count() == 0) {
+                first_audio = std::chrono::steady_clock::now();
+            }
             std::vector<float> src(pcm, pcm + n), rs;
             resample_linear(src, vs.tts_sample_rate(), 24000, rs);
             std::vector<uint8_t> bytes;
@@ -797,6 +856,13 @@ static void serve_chat(int fd, VoiceSession & vs, const std::string & body) {
         emit({{"done", true},
               {"tokens", st.n_llm_tokens},
               {"ms", (int) (st.ms_llm_gen + 0.5)}});
+        auto ms = [](auto a, auto b) {
+            return std::chrono::duration<double, std::milli>(b - a).count();
+        };
+        const auto now = std::chrono::steady_clock::now();
+        log_turn(speak ? "text spoken" : "text", st, 24000,
+                 ms(t_enter, t_go), ms(t_enter, now),
+                 first_audio.time_since_epoch().count() ? ms(t_go, first_audio) : -1.0);
     }
     // restore_guard puts the previous callbacks back.
 }
