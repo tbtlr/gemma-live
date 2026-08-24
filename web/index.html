@@ -126,6 +126,9 @@ footer { flex: none; padding: 10px 16px calc(22px + env(safe-area-inset-bottom))
    decided anything. */
 #composer.typing #mic         { display: none; }
 #composer:not(.typing) #send  { display: none; }
+/* Same rule in voice mode: once there is something to send, sending is the
+   only thing the box should offer. Mute and end come back when it empties. */
+#composer.typing .round       { display: none; }
 
 /* ── voice overlay ────────────────────────────────────────────────── */
 /* Voice mode occupies the conversation area, not the whole window: the
@@ -160,7 +163,7 @@ body.voice #mic   { display: none; }
    affordances, so voice mode adds controls to the box rather than building
    a second row around it. Same 36px box as the send button. */
 .round { display: none; background-color: var(--secondary); color: var(--secondary-foreground); }
-body.voice .round { display: grid; }
+body.voice #composer:not(.typing) .round { display: grid; }
 .round:hover { background-color: var(--accent); opacity: 1; }
 .round.off { background-color: var(--destructive); color: oklch(0.985 0 0); }
 .round.off:hover { background-color: var(--destructive); opacity: .85; }
