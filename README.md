@@ -244,9 +244,13 @@ that carries the audio session — chat and voice in one page, no install.
 ./build/gl-serve          # then open http://127.0.0.1:8927/
 ```
 
-**Type** to chat: `POST /api/chat` streams the reply back over SSE, and
-synthesis is skipped entirely (`end_turn(speak=false)`), which is most of a
-turn's latency — a short reply comes back in ~120 ms.
+**Type** to chat: `POST /api/chat` streams the reply back over SSE.
+Synthesis is skipped by default (`end_turn(speak=false)`), which is most of
+a turn's latency — a short reply comes back in ~120 ms. Passing
+`"speak": true` synthesises it and streams the audio back on the same event
+stream as `{"audio": "<base64 pcm16>"}`, which is what the page does for a
+message typed during voice mode: an aside typed into a spoken conversation
+is still answered out loud.
 
 **Press the wave** for voice mode: the orb takes over the conversation area
 and animates whichever side has the floor. The composer stays live below and

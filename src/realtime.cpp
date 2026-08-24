@@ -488,9 +488,14 @@ static void serve_client(int fd, VoiceSession & vs, const gl_opts & O) {
     conn.on_dead = [&S, &vs] {
         if (S.active.load()) { S.cancelled.store(true); vs.abort_turn(); }
     };
-    vs.on_token = [&S](const char * t)              { S.on_token(t); };
-    vs.on_audio = [&S](const float * p, size_t n)   { S.on_audio(p, n); };
-    vs.on_done  = nullptr;
+    {
+        // Under the turn lock: a text request may be mid-turn with its own
+        // callbacks installed, and it restores what it found on the way out.
+        std::lock_guard<std::mutex> lk(g_turn_mu);
+        vs.on_token = [&S](const char * t)            { S.on_token(t); };
+        vs.on_audio = [&S](const float * p, size_t n) { S.on_audio(p, n); };
+        vs.on_done  = nullptr;
+    }
 
     S.send_event("session.created", {{"session", S.session_object()}});
 
@@ -541,8 +546,11 @@ static void serve_client(int fd, VoiceSession & vs, const gl_opts & O) {
     reader.join();
     conn.on_dead = nullptr;
     S.vad.shutdown();
-    vs.on_token = nullptr;
-    vs.on_audio = nullptr;
+    {
+        std::lock_guard<std::mutex> lk(g_turn_mu);
+        vs.on_token = nullptr;
+        vs.on_audio = nullptr;
+    }
 }
 
 // ── dictation ───────────────────────────────────────────────────────────
@@ -708,8 +716,15 @@ static std::string read_file(const std::string & path) {
 // stateless by definition and would invite exactly the wrong thing.
 static void serve_chat(int fd, VoiceSession & vs, const std::string & body) {
     std::string msg;
+    // "speak": true synthesises the reply and streams it back on the same
+    // event stream. A client in voice mode wants a typed aside answered out
+    // loud like everything else in that conversation; a plain text client
+    // does not, and synthesis is by far the longest part of a turn.
+    bool speak = false;
     try {
-        msg = json::parse(body).value("message", "");
+        const auto j = json::parse(body);
+        msg   = j.value("message", "");
+        speak = j.value("speak", false);
     } catch (const std::exception & e) {
         ws::send_http(fd, "400 Bad Request", "application/json",
                       json({{"error", std::string("bad json: ") + e.what()}}).dump());
@@ -730,20 +745,51 @@ static void serve_chat(int fd, VoiceSession & vs, const std::string & body) {
     if (!ws::send_all(fd, head, strlen(head))) return;
 
     bool broken = false;
+    // on_token arrives on this thread, on_audio on the TTS worker, and with
+    // speak=true both are writing to the same socket.
+    std::mutex emit_mu;
     auto emit = [&](const json & j) {
-        if (broken) return;
         const std::string line = "data: " + j.dump() + "\n\n";
+        std::lock_guard<std::mutex> lk(emit_mu);
+        if (broken) return;
         if (!ws::send_all(fd, line.data(), line.size())) broken = true;
     };
 
+    // Save and restore rather than clear. These callbacks are shared state:
+    // a live voice session installs its own at connect time, and a typed
+    // message arriving mid-session must hand them back exactly as it found
+    // them — clearing them would leave the socket's spoken replies silent.
+    //
+    // Restoring is also what keeps this lambda from outliving the frame it
+    // captures. Leaving it installed once serve_chat returns points on_audio
+    // at a dead stack, and the next turn to produce audio locks a mutex that
+    // is no longer a mutex.
+    auto prev_token = vs.on_token;
+    auto prev_audio = vs.on_audio;
+    auto prev_done  = vs.on_done;
+    struct restore {
+        VoiceSession & vs;
+        std::function<void(const char *)> t;
+        std::function<void(const float *, size_t)> a;
+        std::function<void()> d;
+        ~restore() { vs.on_token = t; vs.on_audio = a; vs.on_done = d; }
+    } restore_guard{vs, prev_token, prev_audio, prev_done};
+
     vs.on_token = [&](const char * t) { emit({{"delta", t}}); };
-    vs.on_audio = nullptr;
     vs.on_done  = nullptr;
+    vs.on_audio = nullptr;
+    if (speak) {
+        vs.on_audio = [&](const float * pcm, size_t n) {
+            std::vector<float> src(pcm, pcm + n), rs;
+            resample_linear(src, vs.tts_sample_rate(), 24000, rs);
+            std::vector<uint8_t> bytes;
+            float_to_pcm16(rs.data(), rs.size(), bytes);
+            emit({{"audio", ws::b64_encode(bytes.data(), bytes.size())}});
+        };
+    }
 
     bool ok = vs.begin_turn(VoiceSession::turn_kind::text) && vs.push_text(msg);
-    // speak=false: nobody is listening to a typed exchange, and synthesis is
-    // by far the longest part of a turn.
-    if (ok) ok = vs.end_turn(/*speak=*/ false);
+    if (ok) ok = vs.end_turn(speak);
 
     if (!ok) emit({{"error", vs.last_error()}});
     else {
@@ -752,7 +798,7 @@ static void serve_chat(int fd, VoiceSession & vs, const std::string & body) {
               {"tokens", st.n_llm_tokens},
               {"ms", (int) (st.ms_llm_gen + 0.5)}});
     }
-    vs.on_token = nullptr;
+    // restore_guard puts the previous callbacks back.
 }
 
 static void serve_page(int fd, const std::string & ui_path, const std::string & req_path) {

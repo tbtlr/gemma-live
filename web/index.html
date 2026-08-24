@@ -238,7 +238,7 @@ const BARGE_RMS = 0.02, BARGE_HOLD = 3;
 let ws, ctx, mic, inAn, outAn, outGain;
 let playCursor = 0, sources = [], loudRun = 0;
 let speaking = false, voiceOn = false, muted = false, busy = false;
-let liveBot = null;
+let liveBot = null, wsResponding = false, httpSpeaking = false;
 
 // ── thread ────────────────────────────────────────────────────────────
 function addMsg(who, text) {
@@ -267,7 +267,9 @@ async function sendText(text) {
   try {
     const res = await fetch('/api/chat', {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ message: text })
+      // In voice mode a typed aside is still part of a spoken conversation,
+      // so ask for it out loud and play it through the same graph.
+      body: JSON.stringify({ message: text, speak: voiceOn })
     });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const reader = res.body.getReader(), dec = new TextDecoder();
@@ -282,6 +284,7 @@ async function sendText(text) {
         if (!line.startsWith('data: ')) continue;
         const m = JSON.parse(line.slice(6));
         if (m.delta) { body.textContent += m.delta; scroll(); }
+        if (m.audio && ctx) { httpSpeaking = true; enqueue(fromB64(m.audio)); }
         if (m.error) { body.textContent += '\n[' + m.error + ']'; }
         if (m.done) {
           const info = document.createElement('div');
@@ -345,6 +348,20 @@ function fromB64(b64) {
 function stopAudio() {
   for (const s of sources) { try { s.stop(); } catch (_) {} }
   sources = []; playCursor = 0; speaking = false;
+  endHttpSpeech();
+}
+
+// The server suppresses its own turn detection while IT is speaking, but a
+// typed reply is spoken over HTTP and the socket knows nothing about it. So
+// the microphone is gated here instead for the length of that playback —
+// otherwise the mic hears Gemma, the VAD calls it a user turn, and she
+// answers herself. Whatever leaked in before the gate closed is dropped.
+function endHttpSpeech() {
+  if (!httpSpeaking) return;
+  httpSpeaking = false;
+  if (ws && ws.readyState === 1) {
+    ws.send(JSON.stringify({ type: 'input_audio_buffer.clear' }));
+  }
 }
 function enqueue(f32) {
   const buf = ctx.createBuffer(1, f32.length, RATE);
@@ -355,7 +372,10 @@ function enqueue(f32) {
   if (playCursor < now) playCursor = now + 0.06;   // small lead on the first chunk
   src.start(playCursor); playCursor += buf.duration;
   sources.push(src);
-  src.onended = () => { sources = sources.filter(s => s !== src); if (!sources.length) speaking = false; };
+  src.onended = () => {
+    sources = sources.filter(s => s !== src);
+    if (!sources.length) { speaking = false; endHttpSpeech(); }
+  };
   speaking = true;
 }
 
@@ -414,11 +434,18 @@ function onChunk(f32) {
     for (let i = 0; i < f32.length; i++) sum += f32[i] * f32[i];
     if (Math.sqrt(sum / f32.length) > BARGE_RMS) {
       if (++loudRun >= BARGE_HOLD) {
-        ws.send(JSON.stringify({ type: 'response.cancel' }));
+        // A typed reply is spoken over HTTP, not the socket, so there is no
+        // response for the socket to cancel — asking anyway earns a spurious
+        // "no active response" error. Stopping playback is the part that
+        // matters either way.
+        if (wsResponding) ws.send(JSON.stringify({ type: 'response.cancel' }));
         stopAudio(); loudRun = 0; endVoiceReply(true);
       }
     } else loudRun = 0;
   }
+  // Barge-in above still reads these chunks; they just must not reach the
+  // server's turn detector while it would be hearing Gemma, not you.
+  if (httpSpeaking) return;
   ws.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: toB64(f32) }));
 }
 
@@ -440,13 +467,14 @@ function connectWs() {
   ws = new WebSocket(proto + location.host + '/v1/realtime');
   ws.onopen  = () => { $('#vstate').textContent = ''; };   // clears a previous failure
   ws.onerror = () => { $('#vstate').textContent = 'connection failed'; };
-  ws.onclose = () => { stopAudio(); if (voiceOn) $('#vstate').textContent = 'disconnected'; };
+  ws.onclose = () => { wsResponding = false; stopAudio(); if (voiceOn) $('#vstate').textContent = 'disconnected'; };
   ws.onmessage = ev => {
     const m = JSON.parse(ev.data);
     switch (m.type) {
       case 'input_audio_buffer.speech_started':
       case 'input_audio_buffer.speech_stopped': break;   // the orb shows this
       case 'response.created':
+        wsResponding = true;
         liveBot = addMsg('bot', '');
         liveBot.querySelector('.body').classList.add('cursor');
         break;
@@ -456,6 +484,7 @@ function connectWs() {
       case 'response.output_audio.delta':
         enqueue(fromB64(m.delta)); break;
       case 'response.done':
+        wsResponding = false;
         endVoiceReply(false);
         break;
       case 'error':
