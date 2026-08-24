@@ -88,7 +88,7 @@ main { flex: 1; overflow-y: auto; }
 body.blank main    { flex: 0 0 auto; margin-top: auto; overflow: visible; }
 body.blank footer  { margin-bottom: auto; }
 body.blank #thread { padding-top: 0; }
-#empty h2 { color: var(--foreground); font-size: 20px; font-weight: 600; margin: 0 0 6px; }
+#empty h2 { color: var(--foreground); font-size: 20px; font-weight: 600; margin: 0; }
 
 /* ── composer ─────────────────────────────────────────────────────── */
 /* A little more room below the composer than the hint used to leave, so
@@ -153,10 +153,7 @@ footer { flex: none; padding: 10px 16px calc(22px + env(safe-area-inset-bottom))
 
 <main>
   <div id="thread">
-    <div id="empty">
-      <h2>Gemma is listening</h2>
-      Type a message, or press the wave to talk.
-    </div>
+    <div id="empty"><h2 id="greet"></h2></div>
   </div>
 </main>
 
@@ -507,6 +504,18 @@ function draw() {
   g.beginPath(); g.arc(cx, cy, radius, 0, Math.PI * 2); g.stroke();
   g.globalAlpha = 1;
 }
+// Greeting by local time. Three bands, not four: "good night" is a
+// farewell in English, so using it to greet someone who just arrived reads
+// as being shown the door. Late hours get "evening" instead.
+(() => {
+  const h = new Date().getHours();
+  const part = h < 5 ? 'evening'
+             : h < 12 ? 'morning'
+             : h < 18 ? 'afternoon'
+             : 'evening';
+  $('#greet').textContent = `Good ${part}, Human`;
+})();
+
 document.body.classList.add('blank');
 draw();
 sync();
