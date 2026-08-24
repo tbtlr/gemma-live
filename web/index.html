@@ -82,7 +82,6 @@ main { flex: 1; overflow-y: auto; }
   white-space: pre-wrap; overflow-wrap: anywhere;
 }
 .msg.bot .body { width: 100%; line-height: 1.75; white-space: pre-wrap; overflow-wrap: anywhere; }
-.tag { font-size: 11px; color: var(--muted-foreground); display: flex; align-items: center; gap: 5px; }
 .msg.bot .info { font-size: 11px; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
 .cursor::after { content: '▍'; opacity: .6; animation: blink 1.1s steps(2) infinite; }
 @keyframes blink { 50% { opacity: 0; } }
@@ -166,7 +165,10 @@ body.voice #mic   { display: none; }
 /* Mute and end sit inside the composer, right-aligned beside the other
    affordances, so voice mode adds controls to the box rather than building
    a second row around it. Same 36px box as the send button. */
-.round { display: none; background-color: var(--secondary); color: var(--secondary-foreground); }
+/* Mute carries no chrome at rest — it is a glyph like the others in the
+   box — and only takes a fill once it is actually muting something. End
+   keeps its solid treatment because it is the destructive-ish action. */
+.round { display: none; }
 body.voice #composer:not(.typing) .round { display: grid; }
 .round:hover { background-color: var(--accent); opacity: 1; }
 .round.off { background-color: var(--destructive); color: oklch(0.985 0 0); }
@@ -212,7 +214,11 @@ body.voice #composer:not(.typing) .round { display: grid; }
     </button>
     <button type="button" class="icon round" id="mute" title="Mute" aria-label="Mute">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-           stroke-width="2" stroke-linecap="round"><path d="M12 2a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4"/></svg>
+           stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M2 2l20 20"/>
+        <path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V5a3 3 0 0 0-5.94-.6"/>
+        <path d="M19 10v2a7 7 0 0 1-.11 1.23M5 10v2a7 7 0 0 0 12 4.95M12 19v3"/>
+      </svg>
     </button>
     <button type="button" class="icon round end" id="hang" title="End voice mode" aria-label="End voice mode">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -235,16 +241,11 @@ let speaking = false, voiceOn = false, muted = false, busy = false;
 let liveBot = null;
 
 // ── thread ────────────────────────────────────────────────────────────
-function addMsg(who, text, tagHtml) {
+function addMsg(who, text) {
   const e = $('#empty');
   if (e) { e.remove(); document.body.classList.remove('blank'); }
   const m = document.createElement('div');
   m.className = 'msg ' + who;
-  if (tagHtml) {
-    const t = document.createElement('div');
-    t.className = 'tag'; t.innerHTML = tagHtml;
-    m.appendChild(t);
-  }
   const b = document.createElement('div');
   b.className = 'body'; b.textContent = text;
   m.appendChild(b);
@@ -253,7 +254,6 @@ function addMsg(who, text, tagHtml) {
   return m;
 }
 const scroll = () => { const m = document.querySelector('main'); m.scrollTop = m.scrollHeight; };
-const VOICE_TAG = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M3 12h1M7 8v8M11 5v14M15 8v8M19 11v2"/></svg> voice';
 
 // ── text chat ─────────────────────────────────────────────────────────
 async function sendText(text) {
@@ -447,7 +447,7 @@ function connectWs() {
       case 'input_audio_buffer.speech_started':
       case 'input_audio_buffer.speech_stopped': break;   // the orb shows this
       case 'response.created':
-        liveBot = addMsg('bot', '', VOICE_TAG);
+        liveBot = addMsg('bot', '');
         liveBot.querySelector('.body').classList.add('cursor');
         break;
       case 'response.output_audio_transcript.delta':

@@ -825,11 +825,29 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    // Dictation is optional: a missing model costs the /api/transcribe route,
-    // not the server.
-    if (!g_stt.init(O.stt_model, O.stt_threads, O.verbosity) && O.verbosity > 0) {
-        fprintf(stderr, "stt      DISABLED — could not load %s\n",
-                O.stt_model.empty() ? "(no model set)" : O.stt_model.c_str());
+    // What actually got loaded. The session prints its own mtp line from
+    // inside create(); everything else the server owns has to say so here,
+    // or the only evidence of a wrong --tts-voice or a missing system prompt
+    // is the behaviour hours later.
+    const bool stt_ok = g_stt.init(O.stt_model, O.stt_threads, O.verbosity);
+    if (O.verbosity > 0) {
+        fprintf(stderr, "llm      %s\n", O.llm_model.c_str());
+        if (cfg.system_prompt.empty()) {
+            fprintf(stderr, "sys      none\n");
+        } else {
+            fprintf(stderr, "sys      %s (%d tokens)\n",
+                    O.sys_prompt.c_str(), vs->system_tokens());
+        }
+        const int tts_rate = vs->tts_sample_rate();
+        fprintf(stderr, "tts      %s @ %d Hz%s\n"
+                        "         voice %s, cfg %.2f, steps %d, anchor %.2f\n",
+                O.tts_model.c_str(), tts_rate,
+                tts_rate == GL_TTS_RATE ? "" : " (dfn post-filter active)",
+                O.tts_voice.c_str(), cfg.tts_cfg, cfg.tts_steps, cfg.tts_neg_anchor);
+        fprintf(stderr, "vad      firered-vad, %d ms silence\n", O.vad_silence);
+        if (stt_ok) fprintf(stderr, "stt      %s\n", O.stt_model.c_str());
+        else        fprintf(stderr, "stt      DISABLED — could not load %s\n",
+                            O.stt_model.empty() ? "(no model set)" : O.stt_model.c_str());
     }
 
     const int lfd = ws::listen_on(O.rt_host.c_str(), O.rt_port, &err);

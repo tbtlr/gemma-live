@@ -255,8 +255,8 @@ than spoken does not mean leaving voice mode first. Speaking over Gemma cuts
 her off.
 
 Voice mode shows no text at all. What Gemma says streams into the chat
-thread as it arrives, tagged as voice, so closing voice mode leaves the
-conversation where you can read it.
+thread as it arrives, so closing voice mode leaves the conversation where
+you can read it.
 
 Both share one model context, so they are genuinely one conversation — ask
 something aloud, then follow up by typing, and the pronoun resolves. Spoken
