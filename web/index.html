@@ -99,12 +99,20 @@ footer { flex: none; padding: 10px 16px calc(14px + env(safe-area-inset-bottom))
 #box::placeholder { color: var(--muted-foreground); }
 .icon {
   width: 36px; height: 36px; border-radius: 50%; flex: none;
-  display: grid; place-items: center; transition: opacity .15s, background .15s;
+  display: grid; place-items: center;
+  transition: opacity .15s, background-color .15s;
 }
-.icon:hover { background: var(--accent); }
-.icon.filled { background: var(--primary); color: var(--primary-foreground); }
-.icon.filled:hover { opacity: .85; background: var(--primary); }
-.icon:disabled { opacity: .35; cursor: default; background: none; }
+.icon:hover { background-color: var(--accent); }
+.icon.filled { background-color: var(--primary); color: var(--primary-foreground); }
+.icon.filled:hover { opacity: .85; background-color: var(--primary); }
+/* Keep the shape when there is nothing to send. Dropping the fill and
+   dimming to 0.35 left it invisible against a dark ground, which reads as
+   a missing button rather than an inactive one. */
+.icon:disabled { cursor: default; }
+.icon.filled:disabled {
+  background-color: var(--muted); color: var(--muted-foreground); opacity: 1;
+}
+.icon.filled:disabled:hover { background-color: var(--muted); opacity: 1; }
 .hint { max-width: 46rem; margin: 8px auto 0; text-align: center;
         font-size: 11px; color: var(--muted-foreground); }
 
@@ -124,12 +132,12 @@ footer { flex: none; padding: 10px 16px calc(14px + env(safe-area-inset-bottom))
 #vbar { display: flex; gap: 14px; margin-top: 4px; }
 .round {
   width: 54px; height: 54px; border-radius: 50%; display: grid; place-items: center;
-  background: var(--secondary); color: var(--secondary-foreground);
-  border: 1px solid var(--border); transition: background .15s, opacity .15s;
+  background-color: var(--secondary); color: var(--secondary-foreground);
+  border: 1px solid var(--border); transition: background-color .15s, opacity .15s;
 }
 .round:hover { opacity: .8; }
-.round.off { background: var(--destructive); color: oklch(0.985 0 0); border-color: transparent; }
-.round.end { background: var(--primary); color: var(--primary-foreground); border-color: transparent; }
+.round.off { background-color: var(--destructive); color: oklch(0.985 0 0); border-color: transparent; }
+.round.end { background-color: var(--primary); color: var(--primary-foreground); border-color: transparent; }
 </style>
 
 <header>
