@@ -95,7 +95,7 @@ body.blank #thread { padding-top: 0; }
    dropping it does not leave the box sitting on the window edge. */
 footer { flex: none; padding: 10px 16px calc(22px + env(safe-area-inset-bottom)); }
 #composer {
-  max-width: 46rem; margin: 0 auto; display: flex; align-items: flex-end; gap: 8px;
+  max-width: 46rem; margin: 0 auto; display: flex; align-items: flex-end; gap: 6px;
   border: 1px solid var(--input); border-radius: 1.6rem; padding: 7px 7px 7px 16px;
   background: var(--card); transition: border-color .15s;
 }
@@ -146,24 +146,26 @@ body.voice footer { margin-bottom: 0; }
 body.voice #mic   { display: none; }
 
 #orb { width: min(56vw, 260px); aspect-ratio: 1; }
-#vstate { color: var(--muted-foreground); font-size: 13px; min-height: 20px; }
+/* Failures only. The orb already says listening / speaking / muted better
+   than a caption can, but a denied microphone or a dropped socket has to
+   be visible or the orb just sits there looking fine. */
+#vstate { color: var(--destructive); font-size: 13px; }
+#vstate:empty { display: none; }
 #vsaid {
   max-width: min(90vw, 34rem); text-align: center; min-height: 3.4em;
   color: var(--foreground); font-size: 17px; line-height: 1.5; padding: 0 8px;
 }
 
-#bar { max-width: 46rem; margin: 0 auto; display: flex; align-items: flex-end; gap: 8px; }
-#bar #composer { flex: 1; margin: 0; max-width: none; }
-.round {
-  width: 48px; height: 48px; flex: none; border-radius: 50%;
-  display: none; place-items: center;
-  background-color: var(--secondary); color: var(--secondary-foreground);
-  border: 1px solid var(--border); transition: background-color .15s, opacity .15s;
-}
+/* Mute and end sit inside the composer, right-aligned beside the other
+   affordances, so voice mode adds controls to the box rather than building
+   a second row around it. Same 36px box as the send button. */
+.round { display: none; background-color: var(--secondary); color: var(--secondary-foreground); }
 body.voice .round { display: grid; }
-.round:hover { opacity: .8; }
-.round.off { background-color: var(--destructive); color: oklch(0.985 0 0); border-color: transparent; }
-.round.end { background-color: var(--primary); color: var(--primary-foreground); border-color: transparent; }
+.round:hover { background-color: var(--accent); opacity: 1; }
+.round.off { background-color: var(--destructive); color: oklch(0.985 0 0); }
+.round.off:hover { background-color: var(--destructive); opacity: .85; }
+.round.end { background-color: var(--primary); color: var(--primary-foreground); }
+.round.end:hover { background-color: var(--primary); opacity: .85; }
 </style>
 
 <header>
@@ -178,39 +180,35 @@ body.voice .round { display: grid; }
 
   <div id="voice">
     <canvas id="orb"></canvas>
-    <div id="vstate">connecting…</div>
+    <div id="vstate"></div>
     <div id="vsaid"></div>
   </div>
 </main>
 
 <footer>
-  <div id="bar">
-    <button class="round" id="mute" title="Mute" aria-label="Mute">
+  <form id="composer">
+    <textarea id="box" rows="1" placeholder="Ask anything" autocomplete="off"></textarea>
+    <button type="button" class="icon filled" id="mic" title="Voice mode" aria-label="Voice mode">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round">
+        <path d="M3 12h1M7 8v8M11 4v16M15 7v10M19 10v4M21 12h0"/>
+      </svg>
+    </button>
+    <button type="submit" class="icon filled" id="send" title="Send" aria-label="Send" disabled>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 19V5M5 12l7-7 7 7"/>
+      </svg>
+    </button>
+    <button type="button" class="icon round" id="mute" title="Mute" aria-label="Mute">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
            stroke-width="2" stroke-linecap="round"><path d="M12 2a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4"/></svg>
     </button>
-
-    <form id="composer">
-      <textarea id="box" rows="1" placeholder="Ask anything" autocomplete="off"></textarea>
-      <button type="button" class="icon filled" id="mic" title="Voice mode" aria-label="Voice mode">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-             stroke-width="2" stroke-linecap="round">
-          <path d="M3 12h1M7 8v8M11 4v16M15 7v10M19 10v4M21 12h0"/>
-        </svg>
-      </button>
-      <button type="submit" class="icon filled" id="send" title="Send" aria-label="Send" disabled>
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-             stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 19V5M5 12l7-7 7 7"/>
-        </svg>
-      </button>
-    </form>
-
-    <button class="round end" id="hang" title="End voice mode" aria-label="End voice mode">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+    <button type="button" class="icon round end" id="hang" title="End voice mode" aria-label="End voice mode">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
            stroke-width="2.4" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
     </button>
-  </div>
+  </form>
 </footer>
 
 <script>
@@ -354,7 +352,9 @@ function enqueue(f32) {
 // ── voice: session ────────────────────────────────────────────────────
 async function openVoice() {
   document.body.classList.add('voice');
-  $('#vstate').textContent = 'requesting microphone…';
+  // Talking is the primary act here; the box is the alternative, so it says
+  // what it is for rather than repeating the general invitation.
+  $('#box').placeholder = 'Type';
   $('#vsaid').textContent = '';
 
   try {
@@ -427,22 +427,21 @@ function commitVoiceReply(interrupted) {
 function connectWs() {
   const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
   ws = new WebSocket(proto + location.host + '/v1/realtime');
-  ws.onopen  = () => { $('#vstate').textContent = 'listening — just start talking'; };
+  ws.onopen  = () => { $('#vstate').textContent = ''; };   // clears a previous failure
   ws.onerror = () => { $('#vstate').textContent = 'connection failed'; };
   ws.onclose = () => { stopAudio(); if (voiceOn) $('#vstate').textContent = 'disconnected'; };
   ws.onmessage = ev => {
     const m = JSON.parse(ev.data);
     switch (m.type) {
-      case 'input_audio_buffer.speech_started': $('#vstate').textContent = 'hearing you…'; break;
-      case 'input_audio_buffer.speech_stopped': $('#vstate').textContent = 'thinking…';    break;
+      case 'input_audio_buffer.speech_started':
+      case 'input_audio_buffer.speech_stopped': break;   // the orb shows this
       case 'response.created': vLive = ''; $('#vsaid').textContent = ''; break;
       case 'response.output_audio_transcript.delta':
         vLive += m.delta; $('#vsaid').textContent = vLive; break;
       case 'response.output_audio.delta':
-        enqueue(fromB64(m.delta)); $('#vstate').textContent = 'speaking'; break;
+        enqueue(fromB64(m.delta)); break;
       case 'response.done':
         commitVoiceReply(false);
-        $('#vstate').textContent = 'listening';
         break;
       case 'error':
         // Empty-buffer errors are routine chatter in a quiet room.
@@ -463,13 +462,15 @@ function closeVoice() {
   if (ctx) ctx.close();
   ctx = null; inAn = outAn = null;
   document.body.classList.remove('voice');
+  $('#box').placeholder = 'Ask anything';
   $('#vsaid').textContent = '';
 }
 
 $('#mic').onclick  = () => voiceOn ? closeVoice() : openVoice();
 $('#hang').onclick = closeVoice;
-$('#mute').onclick = () => { muted = !muted; $('#mute').classList.toggle('off', muted);
-                             $('#vstate').textContent = muted ? 'muted' : 'listening'; };
+// The button turning red is the feedback; a caption saying so as well is
+// one more thing to read.
+$('#mute').onclick = () => { muted = !muted; $('#mute').classList.toggle('off', muted); };
 addEventListener('keydown', e => { if (e.key === 'Escape' && voiceOn) closeVoice(); });
 
 // ── orb ───────────────────────────────────────────────────────────────
