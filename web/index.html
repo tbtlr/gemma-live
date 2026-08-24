@@ -128,24 +128,39 @@ footer { flex: none; padding: 10px 16px calc(22px + env(safe-area-inset-bottom))
 #composer:not(.typing) #send  { display: none; }
 
 /* ── voice overlay ────────────────────────────────────────────────── */
-#voice {
-  position: fixed; inset: 0; z-index: 50; background: var(--background);
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 22px; opacity: 0; pointer-events: none; transition: opacity .22s ease;
+/* Voice mode occupies the conversation area, not the whole window: the
+   composer stays live underneath so a thought that is easier typed than
+   spoken does not require leaving voice mode first. */
+#voice { display: none; }
+body.voice #voice {
+  display: flex; flex: 1; flex-direction: column;
+  align-items: center; justify-content: center; gap: 18px; padding: 8px 16px;
 }
-#voice.open { opacity: 1; pointer-events: auto; }
-#orb { width: min(66vw, 300px); aspect-ratio: 1; }
+body.voice #thread { display: none; }
+/* The blank-state centring would fight the orb for the free space. */
+/* main must be a flex CONTAINER here, or #voice's flex:1 has nothing to
+   fill against and the orb hangs off the top of the area. */
+body.voice main   { flex: 1; margin-top: 0; overflow: hidden; display: flex; }
+body.voice footer { margin-bottom: 0; }
+/* Already in voice mode — the button that gets you there is noise here. */
+body.voice #mic   { display: none; }
+
+#orb { width: min(56vw, 260px); aspect-ratio: 1; }
 #vstate { color: var(--muted-foreground); font-size: 13px; min-height: 20px; }
 #vsaid {
   max-width: min(90vw, 34rem); text-align: center; min-height: 3.4em;
   color: var(--foreground); font-size: 17px; line-height: 1.5; padding: 0 8px;
 }
-#vbar { display: flex; gap: 14px; margin-top: 4px; }
+
+#bar { max-width: 46rem; margin: 0 auto; display: flex; align-items: flex-end; gap: 8px; }
+#bar #composer { flex: 1; margin: 0; max-width: none; }
 .round {
-  width: 54px; height: 54px; border-radius: 50%; display: grid; place-items: center;
+  width: 48px; height: 48px; flex: none; border-radius: 50%;
+  display: none; place-items: center;
   background-color: var(--secondary); color: var(--secondary-foreground);
   border: 1px solid var(--border); transition: background-color .15s, opacity .15s;
 }
+body.voice .round { display: grid; }
 .round:hover { opacity: .8; }
 .round.off { background-color: var(--destructive); color: oklch(0.985 0 0); border-color: transparent; }
 .round.end { background-color: var(--primary); color: var(--primary-foreground); border-color: transparent; }
@@ -160,41 +175,43 @@ footer { flex: none; padding: 10px 16px calc(22px + env(safe-area-inset-bottom))
   <div id="thread">
     <div id="empty"><h2 id="greet"></h2></div>
   </div>
+
+  <div id="voice">
+    <canvas id="orb"></canvas>
+    <div id="vstate">connecting…</div>
+    <div id="vsaid"></div>
+  </div>
 </main>
 
 <footer>
-  <form id="composer">
-    <textarea id="box" rows="1" placeholder="Ask anything" autocomplete="off"></textarea>
-    <button type="button" class="icon filled" id="mic" title="Voice mode" aria-label="Voice mode">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-           stroke-width="2" stroke-linecap="round">
-        <path d="M3 12h1M7 8v8M11 4v16M15 7v10M19 10v4M21 12h0"/>
-      </svg>
-    </button>
-    <button type="submit" class="icon filled" id="send" title="Send" aria-label="Send" disabled>
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-           stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M12 19V5M5 12l7-7 7 7"/>
-      </svg>
-    </button>
-  </form>
-  </footer>
-
-<div id="voice">
-  <canvas id="orb"></canvas>
-  <div id="vstate">connecting…</div>
-  <div id="vsaid"></div>
-  <div id="vbar">
+  <div id="bar">
     <button class="round" id="mute" title="Mute" aria-label="Mute">
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
            stroke-width="2" stroke-linecap="round"><path d="M12 2a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4"/></svg>
     </button>
+
+    <form id="composer">
+      <textarea id="box" rows="1" placeholder="Ask anything" autocomplete="off"></textarea>
+      <button type="button" class="icon filled" id="mic" title="Voice mode" aria-label="Voice mode">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round">
+          <path d="M3 12h1M7 8v8M11 4v16M15 7v10M19 10v4M21 12h0"/>
+        </svg>
+      </button>
+      <button type="submit" class="icon filled" id="send" title="Send" aria-label="Send" disabled>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 19V5M5 12l7-7 7 7"/>
+        </svg>
+      </button>
+    </form>
+
     <button class="round end" id="hang" title="End voice mode" aria-label="End voice mode">
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
            stroke-width="2.4" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
     </button>
   </div>
-</div>
+</footer>
 
 <script>
 const $ = s => document.querySelector(s);
@@ -336,7 +353,7 @@ function enqueue(f32) {
 
 // ── voice: session ────────────────────────────────────────────────────
 async function openVoice() {
-  $('#voice').classList.add('open');
+  document.body.classList.add('voice');
   $('#vstate').textContent = 'requesting microphone…';
   $('#vsaid').textContent = '';
 
@@ -445,7 +462,7 @@ function closeVoice() {
   if (mic) mic.getTracks().forEach(t => t.stop());
   if (ctx) ctx.close();
   ctx = null; inAn = outAn = null;
-  $('#voice').classList.remove('open');
+  document.body.classList.remove('voice');
   $('#vsaid').textContent = '';
 }
 
@@ -465,7 +482,7 @@ const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).
 
 function draw() {
   requestAnimationFrame(draw);
-  if (!$('#voice').classList.contains('open')) return;
+  if (!document.body.classList.contains('voice')) return;
 
   const dpr = devicePixelRatio || 1, w = cv.clientWidth, h = cv.clientHeight;
   if (!w || !h) return;

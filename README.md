@@ -248,8 +248,10 @@ that carries the audio session — chat and voice in one page, no install.
 synthesis is skipped entirely (`end_turn(speak=false)`), which is most of a
 turn's latency — a short reply comes back in ~120 ms.
 
-**Press the wave** for voice mode: a full-screen view with an orb that
-animates whichever side has the floor, a live transcript, mute, and end.
+**Press the wave** for voice mode: the orb takes over the conversation area
+and animates whichever side has the floor, with a live transcript under it.
+The composer stays live below, flanked by mute and end — so a thought that
+is easier typed than spoken does not mean leaving voice mode first.
 Speaking over Gemma cuts her off.
 
 Both share one model context, so they are genuinely one conversation — ask
