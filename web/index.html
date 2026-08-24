@@ -67,17 +67,23 @@ button { font: inherit; color: inherit; border: 0; background: none; cursor: poi
 
 /* ── header ───────────────────────────────────────────────────────── */
 header {
-  display: flex; align-items: center; gap: 8px;
+  /* Proportions taken from Google's own Gemma lockup: the mark stands 1.69x
+     the wordmark's cap height, separated by 0.18 of that cap. At an 18px
+     wordmark that puts the mark at 22px and the gap at 2px.
+     align-items does the centring — measured against a real baseline the
+     mark lands 0.5px off the cap centre, and a hand-tuned nudge here was
+     wrong by 1.8px in the other direction. */
+  display: flex; align-items: center; gap: 2px;
   padding: 12px 16px; border-bottom: 1px solid var(--border); flex: none;
 }
-header b { font-weight: 600; font-size: 14px; }
+header b { font-weight: 600; font-size: 18px; letter-spacing: -.01em; }
 /* Google's Gemma mark, monochrome variant — the same geometry as the
    gradient one, drawn in currentColor. Inheriting the header's colour is
    what makes it work in both themes: white on the dark ground, near-black
    on the light one. A literal white fill would vanish in light mode.
 
-   22px, not smaller: the mark is a diamond inside a ringed crosshair, and
-   below about 20px those hairlines blur into an indistinct sparkle. */
+   Not below about 20px: the mark is a diamond inside a ringed crosshair,
+   and under that those hairlines blur into an indistinct sparkle. */
 .mark { width: 22px; height: 22px; flex: none; display: block; }
 header .meta { color: var(--muted-foreground); font-size: 12px; margin-left: auto;
                font-variant-numeric: tabular-nums; }
@@ -106,7 +112,8 @@ main { flex: 1; overflow-y: auto; }
 body.blank main    { flex: 0 0 auto; margin-top: auto; overflow: visible; }
 body.blank footer  { margin-bottom: auto; }
 body.blank #thread { padding-top: 0; }
-#empty h2 { color: var(--foreground); font-size: 20px; font-weight: 600; margin: 0; }
+#empty h2 { color: var(--foreground); font-size: 24px; font-weight: 600;
+             letter-spacing: -.015em; margin: 0; }
 
 /* ── composer ─────────────────────────────────────────────────────── */
 /* A little more room below the composer than the hint used to leave, so
