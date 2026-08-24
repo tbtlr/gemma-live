@@ -619,7 +619,18 @@ int main(int argc, char ** argv) {
     }
 
     const int lfd = ws::listen_on(O.rt_host.c_str(), O.rt_port, &err);
-    if (lfd < 0) { fprintf(stderr, "ERR: %s\n", err.c_str()); return 1; }
+    if (lfd < 0) {
+        fprintf(stderr, "ERR: %s\n", err.c_str());
+        // Overwhelmingly this is another gl-serve still running, which is
+        // easy to do and annoying to diagnose from errno alone.
+        if (err.find("Address already in use") != std::string::npos) {
+            fprintf(stderr,
+                "     Something is already listening there. Find it with:\n"
+                "       lsof -nP -iTCP:%d -sTCP:LISTEN\n"
+                "     then stop it, or use a different --rt-port.\n", O.rt_port);
+        }
+        return 1;
+    }
 
     if (O.verbosity > 0) {
         fprintf(stderr, "\ngl-serve ready.\n");
