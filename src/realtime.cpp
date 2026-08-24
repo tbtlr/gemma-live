@@ -684,6 +684,21 @@ static void serve_transcribe(int fd, const std::string & body) {
                         {"chunks", n_chunks}}).dump());
 }
 
+// Read the UI page off disk on every request. It is one small file on a
+// local dev tool, and re-reading means editing the HTML and hitting reload
+// works without rebuilding the binary.
+static std::string read_file(const std::string & path) {
+    FILE * f = fopen(path.c_str(), "rb");
+    if (!f) return {};
+    std::string out;
+    char buf[8192];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0) out.append(buf, n);
+    fclose(f);
+    return out;
+}
+
+
 // POST /api/chat  {"message": "..."}  ->  text/event-stream
 //
 // One message per request rather than the whole transcript: the model keeps
@@ -740,6 +755,20 @@ static void serve_chat(int fd, VoiceSession & vs, const std::string & body) {
     vs.on_token = nullptr;
 }
 
+static void serve_page(int fd, const std::string & ui_path, const std::string & req_path) {
+    if (req_path != "/" && req_path != "/index.html") {
+        ws::send_http(fd, "404 Not Found", "text/plain", "not found\n");
+        return;
+    }
+    const std::string body = read_file(ui_path);
+    if (body.empty()) {
+        ws::send_http(fd, "500 Internal Server Error", "text/plain",
+                      "cannot read " + ui_path + "\n"
+                      "Run gl-serve from the repo root, or pass --rt-ui.\n");
+        return;
+    }
+    ws::send_http(fd, "200 OK", "text/html; charset=utf-8", body);
+}
 
 int main(int argc, char ** argv) {
     // Belt and braces with SO_NOSIGPIPE in ws.h: any write path that slips
@@ -819,6 +848,7 @@ int main(int argc, char ** argv) {
 
     if (O.verbosity > 0) {
         fprintf(stderr, "\ngl-serve ready.\n");
+        fprintf(stderr, "  http://%s:%d/                 web ui\n", O.rt_host.c_str(), O.rt_port);
         fprintf(stderr, "  ws://%s:%d/v1/realtime        voice session\n", O.rt_host.c_str(), O.rt_port);
         fprintf(stderr, "  http://%s:%d/api/chat         text chat\n", O.rt_host.c_str(), O.rt_port);
         if (g_stt.ctx) {
@@ -863,11 +893,7 @@ int main(int argc, char ** argv) {
                 // queue behind a spoken reply.
                 serve_transcribe(fd, req.body);
             } else {
-                ws::send_http(fd, "426 Upgrade Required", "text/plain",
-                              "gemma-live\n\n"
-                              "  ws   /v1/realtime      voice session (OpenAI Realtime)\n"
-                              "  POST /api/chat         {\"message\": \"...\"} -> SSE\n"
-                              "  POST /api/transcribe   {\"audio\": \"<base64 pcm16>\"} -> text\n");
+                serve_page(fd, O.rt_ui, req.path);
             }
             close(fd);
             continue;
