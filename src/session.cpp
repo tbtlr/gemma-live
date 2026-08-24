@@ -300,9 +300,11 @@ struct VoiceSession::Impl {
 
     // Active-turn state (valid between begin_turn and end_turn)
     bool                                 in_turn          = false;
+    bool                                 turn_is_text     = false;
     mtmd_audio_stream                  * mtmd_stream      = nullptr;
     std::atomic<vibevoice_tts_stream *>  tts_session{nullptr};
     int                                  n_audio_tokens   = 0;
+    int                                  n_text_tokens    = 0;
     llama_pos                            n_past_before_turn = 0;
     std::atomic<bool>                    abort_flag{false};
 
@@ -653,7 +655,7 @@ VoiceSession::~VoiceSession() {
     // llama_init's unique_ptr cleans up model + lctx.
 }
 
-bool VoiceSession::begin_turn() {
+bool VoiceSession::begin_turn(VoiceSession::turn_kind kind) {
     Impl * s = impl.get();
     if (s->in_turn) { s->error = "begin_turn: turn already in progress"; return false; }
 
@@ -681,6 +683,7 @@ bool VoiceSession::begin_turn() {
     }
 
     s->n_audio_tokens  = 0;
+    s->n_text_tokens   = 0;
     s->n_past_before_turn = s->n_past;
     s->prompt_hist_before_turn = s->prompt_hist.size();
     s->abort_flag.store(false);
@@ -709,9 +712,13 @@ bool VoiceSession::begin_turn() {
         s->prompt_hist_after_system = s->prompt_hist.size();
     }
 
+    s->turn_is_text = (kind == VoiceSession::turn_kind::text);
+    // Same turn framing either way; an audio turn additionally opens the
+    // <|audio> span that the encoder's embeddings live inside.
+    const char * open_tag = s->turn_is_text ? "" : "<|audio>";
     const std::string prefix = (s->turn == 0 || s->history_reset)
-        ? std::string("<|turn>user\n<|audio>")
-        : std::string("<turn|>\n<|turn>user\n<|audio>");
+        ? std::string("<|turn>user\n") + open_tag
+        : std::string("<turn|>\n<|turn>user\n") + open_tag;
     s->history_reset = false;
     auto toks = common_tokenize(s->lctx, prefix, /*add_special=*/ false,
                                                 /*parse_special=*/ true);
@@ -722,10 +729,12 @@ bool VoiceSession::begin_turn() {
     }
     s->prompt_hist.insert(s->prompt_hist.end(), toks.begin(), toks.end());
 
-    s->mtmd_stream = mtmd_audio_stream_init(s->ctx_mtmd.get());
-    if (!s->mtmd_stream) {
-        s->error = "begin_turn: mtmd_audio_stream_init failed";
-        return false;
+    if (!s->turn_is_text) {
+        s->mtmd_stream = mtmd_audio_stream_init(s->ctx_mtmd.get());
+        if (!s->mtmd_stream) {
+            s->error = "begin_turn: mtmd_audio_stream_init failed";
+            return false;
+        }
     }
 
 #if defined(CRISPASR_DFN)
@@ -742,6 +751,27 @@ bool VoiceSession::begin_turn() {
 #endif
 
     s->in_turn = true;
+    return true;
+}
+
+bool VoiceSession::push_text(const std::string & text) {
+    Impl * s = impl.get();
+    if (!s->in_turn)      { s->error = "push_text: no turn in progress"; return false; }
+    if (!s->turn_is_text) { s->error = "push_text: this is an audio turn"; return false; }
+    if (text.empty())     return true;
+
+    // parse_special=false: user text is DATA. Letting it be parsed would let
+    // a typed "<|turn>model" forge a turn boundary and put words in Gemma's
+    // mouth for every turn after it.
+    auto toks = common_tokenize(s->lctx, text, /*add_special=*/ false,
+                                               /*parse_special=*/ false);
+    if (decode_text_tokens(s->lctx, toks, s->n_past, /*seq=*/ 0, s->n_batch,
+                           /*logits_last=*/ false)) {
+        s->error = "push_text: decode failed";
+        return false;
+    }
+    s->prompt_hist.insert(s->prompt_hist.end(), toks.begin(), toks.end());
+    s->n_text_tokens += (int) toks.size();
     return true;
 }
 
@@ -762,7 +792,7 @@ bool VoiceSession::push_audio(const float * pcm, size_t n_samples) {
     return true;
 }
 
-bool VoiceSession::end_turn() {
+bool VoiceSession::end_turn(bool speak) {
     Impl * s = impl.get();
     if (!s->in_turn) { s->error = "end_turn: no turn in progress"; return false; }
 
@@ -808,9 +838,11 @@ bool VoiceSession::end_turn() {
         common_sampler_reset(s->smpl);
     };
 
-    // Finalise audio encoder.
+    // Finalise audio encoder. A text turn never opened one.
     int n_tail = 0;
-    const float * tail = mtmd_audio_stream_finalize(s->mtmd_stream, &n_tail);
+    const float * tail = s->turn_is_text
+        ? nullptr
+        : mtmd_audio_stream_finalize(s->mtmd_stream, &n_tail);
     if (n_tail > 0) {
         if (decode_embeddings(s->lctx, tail, n_tail, s->n_past, /*seq=*/ 0)) {
             mtmd_audio_stream_free(s->mtmd_stream);
@@ -824,12 +856,14 @@ bool VoiceSession::end_turn() {
         }
         s->n_audio_tokens += n_tail;
     }
-    mtmd_audio_stream_free(s->mtmd_stream);
-    s->mtmd_stream = nullptr;
+    if (s->mtmd_stream) {
+        mtmd_audio_stream_free(s->mtmd_stream);
+        s->mtmd_stream = nullptr;
+    }
 
-    // Safety net: no audio at all came through — roll the turn back so we
-    // don't feed an empty <|audio> block to the model.
-    if (s->n_audio_tokens == 0) {
+    // Safety net: nothing came through — roll the turn back so we don't ask
+    // the model to answer an empty user turn.
+    if ((s->turn_is_text ? s->n_text_tokens : s->n_audio_tokens) == 0) {
         rollback_turn();
         cleanup_dfn_stream();
         s->in_turn = false;
@@ -841,7 +875,9 @@ bool VoiceSession::end_turn() {
     // Per-turn suffix + model role transition.
     llama_token suffix_last = 0;
     {
-        const std::string suffix = "<audio|><turn|>\n<|turn>model\n";
+        const std::string suffix = s->turn_is_text
+            ? std::string("<turn|>\n<|turn>model\n")
+            : std::string("<audio|><turn|>\n<|turn>model\n");
         auto toks = common_tokenize(s->lctx, suffix, /*add_special=*/ false,
                                                      /*parse_special=*/ true);
         if (decode_text_tokens(s->lctx, toks, s->n_past, /*seq=*/ 0, s->n_batch,
@@ -857,12 +893,14 @@ bool VoiceSession::end_turn() {
         if (!toks.empty()) suffix_last = toks.back();
     }
 
-    // Open async TTS stream for this reply.
+    // Open async TTS stream for this reply, unless the caller only wants
+    // text back.
     s->loudness.reset();
     const auto t_tts_begin = clk::now();
-    vibevoice_tts_stream * tts =
-        vibevoice_tts_stream_begin(s->tts_ctx, Impl::tts_audio_bridge, s);
-    if (!tts) {
+    vibevoice_tts_stream * tts = speak
+        ? vibevoice_tts_stream_begin(s->tts_ctx, Impl::tts_audio_bridge, s)
+        : nullptr;
+    if (speak && !tts) {
         cleanup_dfn_stream();
         rollback_turn();
         s->in_turn = false;
@@ -889,7 +927,7 @@ bool VoiceSession::end_turn() {
                 last_was_ws = false;
             }
         }
-        if (!scratch.empty()) vibevoice_tts_stream_push_text(tts, scratch.c_str());
+        if (tts && !scratch.empty()) vibevoice_tts_stream_push_text(tts, scratch.c_str());
     };
 
     const auto      t_gen_begin = clk::now();
@@ -1019,7 +1057,7 @@ bool VoiceSession::end_turn() {
 
     // Signal end-of-text + join the TTS worker (synth flushes its trailing
     // window through on_audio, then returns).
-    vibevoice_tts_stream_free(tts);
+    if (tts) vibevoice_tts_stream_free(tts);
     s->tts_session.store(nullptr);
 
 #if defined(CRISPASR_DFN)

@@ -115,6 +115,12 @@ static std::string new_id(const char * prefix) {
     return b;
 }
 
+// VoiceSession owns one llama context and is not thread-safe, and it has two
+// front ends: the WebSocket voice session and the text chat endpoint. This is
+// what keeps a typed message from being decoded into the middle of a spoken
+// turn.
+static std::mutex g_turn_mu;
+
 // ── connection ──────────────────────────────────────────────────────────
 struct rt_conn {
     int        fd = -1;
@@ -247,6 +253,7 @@ struct rt_session {
             {"output_index", 0}, {"content_index", 0},
             {"part", {{"type", "audio"}, {"transcript", ""}}}});
 
+        std::lock_guard<std::mutex> lk(g_turn_mu);
         std::string err;
         if (!vs.begin_turn() ||
             !vs.push_audio(buf.data(), buf.size())) {
@@ -548,6 +555,61 @@ static std::string read_file(const std::string & path) {
     return out;
 }
 
+// POST /api/chat  {"message": "..."}  ->  text/event-stream
+//
+// One message per request rather than the whole transcript: the model keeps
+// the conversation in its KV cache, so re-sending history would decode it
+// again every turn and cost more the longer you talk. That is also why this
+// is our own shape and not /v1/chat/completions — the OpenAI schema is
+// stateless by definition and would invite exactly the wrong thing.
+static void serve_chat(int fd, VoiceSession & vs, const std::string & body) {
+    std::string msg;
+    try {
+        msg = json::parse(body).value("message", "");
+    } catch (const std::exception & e) {
+        ws::send_http(fd, "400 Bad Request", "application/json",
+                      json({{"error", std::string("bad json: ") + e.what()}}).dump());
+        return;
+    }
+    if (msg.empty()) {
+        ws::send_http(fd, "400 Bad Request", "application/json",
+                      json({{"error", "message is empty"}}).dump());
+        return;
+    }
+
+    std::lock_guard<std::mutex> lk(g_turn_mu);
+
+    const char * head =
+        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n"
+        "Cache-Control: no-store\r\nConnection: close\r\n\r\n";
+    if (!ws::send_all(fd, head, strlen(head))) return;
+
+    bool broken = false;
+    auto emit = [&](const json & j) {
+        if (broken) return;
+        const std::string line = "data: " + j.dump() + "\n\n";
+        if (!ws::send_all(fd, line.data(), line.size())) broken = true;
+    };
+
+    vs.on_token = [&](const char * t) { emit({{"delta", t}}); };
+    vs.on_audio = nullptr;
+    vs.on_done  = nullptr;
+
+    bool ok = vs.begin_turn(VoiceSession::turn_kind::text) && vs.push_text(msg);
+    // speak=false: nobody is listening to a typed exchange, and synthesis is
+    // by far the longest part of a turn.
+    if (ok) ok = vs.end_turn(/*speak=*/ false);
+
+    if (!ok) emit({{"error", vs.last_error()}});
+    else {
+        const TurnStats & st = vs.last_stats();
+        emit({{"done", true},
+              {"tokens", st.n_llm_tokens},
+              {"ms", (int) (st.ms_llm_gen + 0.5)}});
+    }
+    vs.on_token = nullptr;
+}
+
 static void serve_page(int fd, const std::string & ui_path, const std::string & req_path) {
     if (req_path != "/" && req_path != "/index.html") {
         ws::send_http(fd, "404 Not Found", "text/plain", "not found\n");
@@ -652,10 +714,12 @@ int main(int argc, char ** argv) {
         const int fd = ::accept(lfd, nullptr, nullptr);
         if (fd < 0) { if (errno == EINTR) continue; break; }
 
-        std::string path, herr;
-        const ws::hs r = ws::handshake(fd, &path, &herr);
+        ws::request req;
+        std::string herr;
+        const ws::hs r = ws::handshake(fd, &req, &herr);
         if (r == ws::hs::plain_http) {
-            serve_page(fd, O.rt_ui, path);
+            if (req.method == "POST" && req.path == "/api/chat") serve_chat(fd, *vs, req.body);
+            else                                                 serve_page(fd, O.rt_ui, req.path);
             close(fd);
             continue;
         }
@@ -672,7 +736,7 @@ int main(int argc, char ** argv) {
         }
         if (worker.joinable()) worker.join();   // previous one has already finished
         busy.store(true);
-        if (O.verbosity > 0) fprintf(stderr, "  [client connected %s]\n", path.c_str());
+        if (O.verbosity > 0) fprintf(stderr, "  [client connected %s]\n", req.path.c_str());
         worker = std::thread([fd, &vs, &O, &busy] {
             serve_client(fd, *vs, O);
             close(fd);

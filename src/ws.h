@@ -229,7 +229,14 @@ inline void send_http(int fd, const char * status, const char * content_type,
 // web UI and carry the audio session.
 enum class hs { upgraded, plain_http, failed };
 
-inline hs handshake(int fd, std::string * path, std::string * err) {
+// What a plain HTTP request turned out to be, when handshake() reports one.
+struct request {
+    std::string method;
+    std::string path;
+    std::string body;
+};
+
+inline hs handshake(int fd, request * out, std::string * err) {
     std::string req;
     char buf[1024];
     while (req.find("\r\n\r\n") == std::string::npos) {
@@ -258,14 +265,33 @@ inline hs handshake(int fd, std::string * path, std::string * err) {
         return v;
     };
 
-    if (path) {
-        const size_t s = req.find(' ');
-        const size_t e = (s == std::string::npos) ? std::string::npos : req.find(' ', s + 1);
-        if (s != std::string::npos && e != std::string::npos) *path = req.substr(s + 1, e - s - 1);
+    if (out) {
+        const size_t sp1 = req.find(' ');
+        const size_t sp2 = (sp1 == std::string::npos) ? std::string::npos : req.find(' ', sp1 + 1);
+        if (sp1 != std::string::npos && sp2 != std::string::npos) {
+            out->method = req.substr(0, sp1);
+            out->path   = req.substr(sp1 + 1, sp2 - sp1 - 1);
+        }
     }
 
     const std::string key = value_of("sec-websocket-key");
     if (low.find("upgrade: websocket") == std::string::npos || key.empty()) {
+        // Ordinary request. Pull in the body too, so a POST arrives whole
+        // and the caller never has to touch the socket to finish reading it.
+        if (out) {
+            const size_t hdr_end = req.find("\r\n\r\n") + 4;
+            out->body = req.substr(hdr_end);
+            const std::string cl = value_of("content-length");
+            const size_t want = cl.empty() ? 0 : (size_t) strtoul(cl.c_str(), nullptr, 10);
+            if (want > (16u << 20)) { *err = "body too large"; return hs::failed; }
+            while (out->body.size() < want) {
+                pollfd pf{fd, POLLIN, 0};
+                if (::poll(&pf, 1, 5000) <= 0) { *err = "body timeout"; return hs::failed; }
+                const ssize_t k = ::recv(fd, buf, sizeof(buf), 0);
+                if (k <= 0) { *err = "peer closed reading body"; return hs::failed; }
+                out->body.append(buf, (size_t) k);
+            }
+        }
         return hs::plain_http;      // caller serves it
     }
 

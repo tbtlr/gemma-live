@@ -235,37 +235,51 @@ older beta spelling (`response.audio.delta`).
 
 ### Web UI
 
-`gl-serve` also serves a browser client at `/` on the same port, so there is
-a working microphone-and-speaker front end without installing anything.
+`gl-serve` serves a browser client at `/` on the same port that carries the
+audio session — chat and voice in one page, no install.
 
 ```bash
 ./build/gl-serve          # then open http://127.0.0.1:8927/
 ```
 
-Press Start, allow the microphone, and talk. Server-side turn detection ends
-your turn; Gemma answers; talking over her cuts her off. A ring around the
-centre animates whichever side has the floor — blue while it is hearing you,
-amber while Gemma speaks — driven by an FFT of that side's audio, so the
-picture answers "who is talking" without reading anything.
+**Type** to chat: `POST /api/chat` streams the reply back over SSE, and
+synthesis is skipped entirely (`end_turn(speak=false)`), which is most of a
+turn's latency — a short reply comes back in ~120 ms.
 
-The page owns echo cancellation, via `getUserMedia`'s `echoCancellation`
-constraint. That is the whole reason the server never needs a far-end
-reference, and it is the same division of labour the Realtime API assumes.
+**Press the wave** for voice mode: a full-screen view with an orb that
+animates whichever side has the floor, a live transcript, mute, and end.
+Speaking over Gemma cuts her off.
 
-It is one file (`web/index.html`, served from disk, so editing it and
-reloading needs no rebuild — point `--rt-ui` elsewhere to override). Audio
-is captured in an AudioWorklet batched to 100 ms, and the `AudioContext` is
-opened at 24 kHz so the browser does both sample-rate conversions on the
-audio thread rather than in JavaScript.
+Both share one model context, so they are genuinely one conversation — ask
+something aloud, then follow up by typing, and the pronoun resolves. Spoken
+replies land in the same thread as typed ones, tagged as voice.
 
-Barge-in is client-side. The server only runs turn detection when no
-response is in flight, so cutting a reply short is the client's job — and
-the client is the side that can hear the room. Since the browser's AEC has
-already removed Gemma's voice from the mic, anything above the floor while
-she is speaking is you talking over her, which is the same double-talk
-reasoning `barge.h` applies to the AEC residual.
+The page borrows llama.cpp's design tokens verbatim from
+`tools/ui/src/app.css` — shadcn neutral in oklch, one radius, light and
+dark — and its message layout: user messages right-aligned in a bubble,
+assistant replies full width and unboxed. The orb's two states are llama's
+own accent colours (`--chart-1` blue for listening, `--chart-3` gold for
+speaking) rather than invented ones.
 
-Chrome and Safari both treat `http://localhost` as a secure context, so the
+It is one file (`web/index.html`), served from disk so editing it and
+reloading needs no rebuild; `--rt-ui` points elsewhere.
+
+Two things worth knowing about how it works. The page owns echo
+cancellation via `getUserMedia`'s `echoCancellation` constraint — that is
+what makes the server's lack of a far-end reference correct rather than a
+gap, and it is the division of labour the Realtime API assumes. And
+barge-in is client-side, because the server only runs turn detection when
+no response is in flight; since the browser's AEC has already removed
+Gemma's voice from the mic, anything above the floor while she speaks is
+you talking over her.
+
+`/api/chat` deliberately takes ONE message rather than a transcript. The
+model keeps the conversation in its KV cache, so re-sending history would
+decode it again every turn and cost more the longer you talk — which is
+also why this is not `/v1/chat/completions`, whose schema is stateless by
+definition and would invite exactly that.
+
+Chrome and Safari treat `http://localhost` as a secure context, so the
 microphone works without TLS. Reaching it from another machine needs HTTPS.
 
 ### What it deliberately does not do

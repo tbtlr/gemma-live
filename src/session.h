@@ -217,6 +217,12 @@ public:
      * 0 when there is no system prompt. */
     int system_tokens() const;
 
+    /* What a turn carries. An audio turn wraps its content in the model's
+     * <|audio> markers and runs the mtmd encoder; a text turn is the same
+     * shape without them, so typed input reaches the model through exactly
+     * the same KV-cache bookkeeping — including the rollback on abort. */
+    enum class turn_kind { audio, text };
+
     /* Turn protocol:
      *   1. begin_turn()
      *   2. push_audio(pcm, n)   — repeatedly, while the user speaks
@@ -228,9 +234,17 @@ public:
      *   4. abort_turn()         — optional, any thread, any time. Idempotent.
      *
      * The three turn calls return false on failure; last_error() has why. */
-    bool begin_turn();
+    bool begin_turn(turn_kind kind = turn_kind::audio);
     bool push_audio(const float * pcm, size_t n_samples);
-    bool end_turn();
+
+    /* Append user text. Text turns only; call between begin_turn(text) and
+     * end_turn(). May be called more than once. */
+    bool push_text(const std::string & text);
+
+    /* speak=false samples the reply without opening a TTS stream, for a
+     * typed exchange where nobody is listening — the synthesis is by far
+     * the longest part of a turn, so skipping it is most of the latency. */
+    bool end_turn(bool speak = true);
     void abort_turn();
 
     const TurnStats   & last_stats() const;
