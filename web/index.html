@@ -1,6 +1,6 @@
 <!doctype html>
 <meta charset="utf-8">
-<title>gemma-live</title>
+<title>ChatGemma</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <style>
 /* Design tokens lifted verbatim from llama.cpp's web UI (tools/ui/src/app.css)
@@ -62,8 +62,6 @@ header {
 header b { font-weight: 600; font-size: 14px; }
 header .meta { color: var(--muted-foreground); font-size: 12px; margin-left: auto;
                font-variant-numeric: tabular-nums; }
-#dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted-foreground); }
-#dot.on { background: oklch(0.696 0.17 162.48); }
 
 /* ── conversation ─────────────────────────────────────────────────── */
 main { flex: 1; overflow-y: auto; }
@@ -141,7 +139,7 @@ footer { flex: none; padding: 10px 16px calc(14px + env(safe-area-inset-bottom))
 </style>
 
 <header>
-  <span id="dot"></span><b>gemma-live</b>
+  <b>ChatGemma</b>
   <span class="meta" id="meta"></span>
 </header>
 
@@ -397,9 +395,9 @@ function commitVoiceReply(interrupted) {
 function connectWs() {
   const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
   ws = new WebSocket(proto + location.host + '/v1/realtime');
-  ws.onopen  = () => { $('#dot').className = 'on'; $('#vstate').textContent = 'listening — just start talking'; };
+  ws.onopen  = () => { $('#vstate').textContent = 'listening — just start talking'; };
   ws.onerror = () => { $('#vstate').textContent = 'connection failed'; };
-  ws.onclose = () => { $('#dot').className = ''; stopAudio(); if (voiceOn) $('#vstate').textContent = 'disconnected'; };
+  ws.onclose = () => { stopAudio(); if (voiceOn) $('#vstate').textContent = 'disconnected'; };
   ws.onmessage = ev => {
     const m = JSON.parse(ev.data);
     switch (m.type) {

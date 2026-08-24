@@ -237,8 +237,8 @@ older beta spelling (`response.audio.delta`).
 
 ### Web UI
 
-`gl-serve` serves a browser client at `/` on the same port that carries the
-audio session — chat and voice in one page, no install.
+`gl-serve` serves **ChatGemma**, a browser client at `/` on the same port
+that carries the audio session — chat and voice in one page, no install.
 
 ```bash
 ./build/gl-serve          # then open http://127.0.0.1:8927/
