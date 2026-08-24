@@ -2,6 +2,16 @@
 <meta charset="utf-8">
 <title>ChatGemma</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- The two families ai.google.dev/gemma itself loads. Google Symbols is
+     subsetted to the four glyphs used here: the whole font is 2.5 MB, these
+     are 4 KB. Both are served from Google's CDN rather than vendored — see
+     fonts.google.com/license/googlerestricted. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Google+Sans+Flex:opsz,wght@6..144,1..1000&display=swap">
+<link rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Google+Symbols:opsz,wght,FILL,GRAD,ROND@24,100..700,0..1,0..200,100&icon_names=arrow_upward,close,graphic_eq,mic_off&display=swap">
 <style>
 /* Design tokens lifted verbatim from llama.cpp's web UI (tools/ui/src/app.css)
    so this sits in the same visual family: shadcn neutral in oklch, one radius. */
@@ -48,7 +58,8 @@
 html, body { height: 100%; margin: 0; }
 body {
   background: var(--background); color: var(--foreground);
-  font: 15px/1.6 ui-sans-serif, -apple-system, 'SF Pro Text', Inter, system-ui, sans-serif;
+  font: 15px/1.6 'Google Sans Flex', ui-sans-serif, -apple-system, 'SF Pro Text',
+        Inter, system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   display: flex; flex-direction: column;
 }
@@ -118,6 +129,26 @@ footer { flex: none; padding: 10px 16px calc(22px + env(safe-area-inset-bottom))
   transition: opacity .15s, background-color .15s;
 }
 .icon:hover { background-color: var(--accent); }
+
+/* Google Symbols ligatures. If the font does not arrive — no network, and
+   this is a local-first app — the ligature would render as the literal word
+   "mic_off", so the glyphs stay hidden until a load check passes and the
+   inline SVGs carry the buttons until then. */
+.gs {
+  font-family: 'Google Symbols'; font-weight: normal; font-style: normal;
+  font-size: 20px; line-height: 1; letter-spacing: normal; text-transform: none;
+  white-space: nowrap; word-wrap: normal; direction: ltr;
+  -webkit-font-feature-settings: 'liga'; -webkit-font-smoothing: antialiased;
+  /* Google's own pages ask for wght 100..300 at opsz 48, which is drawn for
+     large display and reads thin at 20px. opsz matches the render size, and
+     wght 350 with a little GRAD sits between the settings that read as too
+     thin and too heavy — GRAD being the axis whose whole job is
+     thickening strokes on a dark ground without changing the footprint. */
+  font-variation-settings: 'FILL' 0, 'wght' 350, 'GRAD' 50, 'opsz' 24, 'ROND' 100;
+  display: none;
+}
+body.gsym .gs  { display: block; }
+body.gsym .fbk { display: none; }
 .icon.filled { background-color: var(--primary); color: var(--primary-foreground); }
 .icon.filled:hover { opacity: .85; background-color: var(--primary); }
 /* Keep the shape when there is nothing to send. Dropping the fill and
@@ -201,19 +232,22 @@ body.voice #composer:not(.typing) .round { display: grid; }
   <form id="composer">
     <textarea id="box" rows="1" placeholder="Ask anything" autocomplete="off"></textarea>
     <button type="button" class="icon filled" id="mic" title="Voice mode" aria-label="Voice mode">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      <span class="gs">graphic_eq</span>
+      <svg class="fbk" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
            stroke-width="2" stroke-linecap="round">
         <path d="M3 12h1M7 8v8M11 4v16M15 7v10M19 10v4M21 12h0"/>
       </svg>
     </button>
     <button type="submit" class="icon filled" id="send" title="Send" aria-label="Send" disabled>
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      <span class="gs">arrow_upward</span>
+      <svg class="fbk" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
            stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M12 19V5M5 12l7-7 7 7"/>
       </svg>
     </button>
     <button type="button" class="icon round" id="mute" title="Mute" aria-label="Mute">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      <span class="gs">mic_off</span>
+      <svg class="fbk" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M2 2l20 20"/>
         <path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V5a3 3 0 0 0-5.94-.6"/>
@@ -221,7 +255,8 @@ body.voice #composer:not(.typing) .round { display: grid; }
       </svg>
     </button>
     <button type="button" class="icon round end" id="hang" title="End voice mode" aria-label="End voice mode">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+      <span class="gs">close</span>
+      <svg class="fbk" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
            stroke-width="2.4" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
     </button>
   </form>
@@ -586,6 +621,13 @@ function draw() {
              : 'evening';
   $('#greet').textContent = `Good ${part}, Human`;
 })();
+
+// Swap in the Google Symbols glyphs only once the font has really loaded.
+if (document.fonts && document.fonts.load) {
+  document.fonts.load('20px "Google Symbols"').then(() => {
+    if (document.fonts.check('20px "Google Symbols"')) document.body.classList.add('gsym');
+  }).catch(() => {});
+}
 
 document.body.classList.add('blank');
 draw();

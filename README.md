@@ -273,6 +273,14 @@ assistant replies full width and unboxed. The orb's two states are llama's
 own accent colours (`--chart-1` blue for listening, `--chart-3` gold for
 speaking) rather than invented ones.
 
+Type is **Google Sans Flex** and icons are **Google Symbols**, the two
+families `ai.google.dev/gemma` itself loads, from Google's CDN. Neither is
+open source — see `fonts.google.com/license/googlerestricted` — so they are
+linked, never vendored, and the page falls back to the system sans and to
+inline SVG icons when they do not load, which matters for a tool meant to
+work offline. Google Symbols is subsetted to the four glyphs used here: the
+whole font is 2.5 MB, these are 4 KB.
+
 It is one file (`web/index.html`), served from disk so editing it and
 reloading needs no rebuild; `--rt-ui` points elsewhere.
 
