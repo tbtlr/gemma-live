@@ -534,6 +534,35 @@ static void serve_client(int fd, VoiceSession & vs, const gl_opts & O) {
     vs.on_audio = nullptr;
 }
 
+// Read the UI page off disk on every request. It is one small file on a
+// local dev tool, and re-reading means editing the HTML and hitting reload
+// works without rebuilding the binary.
+static std::string read_file(const std::string & path) {
+    FILE * f = fopen(path.c_str(), "rb");
+    if (!f) return {};
+    std::string out;
+    char buf[8192];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0) out.append(buf, n);
+    fclose(f);
+    return out;
+}
+
+static void serve_page(int fd, const std::string & ui_path, const std::string & req_path) {
+    if (req_path != "/" && req_path != "/index.html") {
+        ws::send_http(fd, "404 Not Found", "text/plain", "not found\n");
+        return;
+    }
+    const std::string body = read_file(ui_path);
+    if (body.empty()) {
+        ws::send_http(fd, "500 Internal Server Error", "text/plain",
+                      "cannot read " + ui_path + "\n"
+                      "Run gl-serve from the repo root, or pass --rt-ui.\n");
+        return;
+    }
+    ws::send_http(fd, "200 OK", "text/html; charset=utf-8", body);
+}
+
 int main(int argc, char ** argv) {
     // Belt and braces with SO_NOSIGPIPE in ws.h: any write path that slips
     // past the socket option still must not take the process down.
@@ -594,7 +623,8 @@ int main(int argc, char ** argv) {
 
     if (O.verbosity > 0) {
         fprintf(stderr, "\ngl-serve ready.\n");
-        fprintf(stderr, "  ws://%s:%d/v1/realtime\n", O.rt_host.c_str(), O.rt_port);
+        fprintf(stderr, "  http://%s:%d/          web ui\n", O.rt_host.c_str(), O.rt_port);
+        fprintf(stderr, "  ws://%s:%d/v1/realtime  realtime api\n", O.rt_host.c_str(), O.rt_port);
         fprintf(stderr, "  pcm16 mono 24 kHz in and out, server_vad at %d ms\n\n",
                 O.vad_silence);
         fprintf(stderr, "Ctrl+C to quit.\n\n");
@@ -612,7 +642,13 @@ int main(int argc, char ** argv) {
         if (fd < 0) { if (errno == EINTR) continue; break; }
 
         std::string path, herr;
-        if (!ws::handshake(fd, &path, &herr)) {
+        const ws::hs r = ws::handshake(fd, &path, &herr);
+        if (r == ws::hs::plain_http) {
+            serve_page(fd, O.rt_ui, path);
+            close(fd);
+            continue;
+        }
+        if (r != ws::hs::upgraded) {
             if (O.verbosity > 0) fprintf(stderr, "  [rejected: %s]\n", herr.c_str());
             close(fd);
             continue;

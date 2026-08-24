@@ -131,7 +131,7 @@ tune it. `--help` lists all of them with their defaults.
   vad   --vad-model --vad-silence --vad-empty --vad-debug
   nod   --nod-off --nod-phrases --nod-after --nod-gap --nod-mono
         --nod-per-turn --nod-len --nod-gain --nod-debug --nod-dump
-  rt    --rt-host --rt-port                        (gl-serve only)
+  rt    --rt-host --rt-port --rt-ui                (gl-serve only)
   fup   --fup-timeout --fup-hops --fup-gate
   brg   --brg-ratio --brg-floor --brg-sustain --brg-debug
 ```
@@ -232,6 +232,41 @@ server -> client   session.created/updated
 
 Event names follow the GA schema (`response.output_audio.delta`), not the
 older beta spelling (`response.audio.delta`).
+
+### Web UI
+
+`gl-serve` also serves a browser client at `/` on the same port, so there is
+a working microphone-and-speaker front end without installing anything.
+
+```bash
+./build/gl-serve          # then open http://127.0.0.1:8927/
+```
+
+Press Start, allow the microphone, and talk. Server-side turn detection ends
+your turn; Gemma answers; talking over her cuts her off. A ring around the
+centre animates whichever side has the floor — blue while it is hearing you,
+amber while Gemma speaks — driven by an FFT of that side's audio, so the
+picture answers "who is talking" without reading anything.
+
+The page owns echo cancellation, via `getUserMedia`'s `echoCancellation`
+constraint. That is the whole reason the server never needs a far-end
+reference, and it is the same division of labour the Realtime API assumes.
+
+It is one file (`web/index.html`, served from disk, so editing it and
+reloading needs no rebuild — point `--rt-ui` elsewhere to override). Audio
+is captured in an AudioWorklet batched to 100 ms, and the `AudioContext` is
+opened at 24 kHz so the browser does both sample-rate conversions on the
+audio thread rather than in JavaScript.
+
+Barge-in is client-side. The server only runs turn detection when no
+response is in flight, so cutting a reply short is the client's job — and
+the client is the side that can hear the room. Since the browser's AEC has
+already removed Gemma's voice from the mic, anything above the floor while
+she is speaking is you talking over her, which is the same double-talk
+reasoning `barge.h` applies to the AEC residual.
+
+Chrome and Safari both treat `http://localhost` as a secure context, so the
+microphone works without TLS. Reaching it from another machine needs HTTPS.
 
 ### What it deliberately does not do
 

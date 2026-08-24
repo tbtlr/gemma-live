@@ -211,18 +211,33 @@ inline int recv_message(int fd, op * o, std::string * payload, int timeout_ms,
     }
 }
 
+// Send a complete plain HTTP response and be done with the connection.
+inline void send_http(int fd, const char * status, const char * content_type,
+                      const std::string & body) {
+    char head[256];
+    const int n = snprintf(head, sizeof(head),
+        "HTTP/1.1 %s\r\nContent-Type: %s\r\nContent-Length: %zu\r\n"
+        "Cache-Control: no-store\r\nConnection: close\r\n\r\n",
+        status, content_type, body.size());
+    if (send_all(fd, head, (size_t) n)) send_all(fd, body.data(), body.size());
+}
+
 // ── handshake ───────────────────────────────────────────────────────────
-// Reads the client's HTTP upgrade request and answers 101. Returns false
-// (after writing an HTTP error) if this is not a WebSocket upgrade.
-inline bool handshake(int fd, std::string * path, std::string * err) {
+// Reads the client's request. `upgraded` means the 101 has been sent and the
+// connection is now a WebSocket. `plain_http` means it is an ordinary GET —
+// the caller decides what to serve, which is how one port can hand out the
+// web UI and carry the audio session.
+enum class hs { upgraded, plain_http, failed };
+
+inline hs handshake(int fd, std::string * path, std::string * err) {
     std::string req;
     char buf[1024];
     while (req.find("\r\n\r\n") == std::string::npos) {
-        if (req.size() > 32768) { *err = "header too large"; return false; }
+        if (req.size() > 32768) { *err = "header too large"; return hs::failed; }
         pollfd pf{fd, POLLIN, 0};
-        if (::poll(&pf, 1, 5000) <= 0) { *err = "handshake timeout"; return false; }
+        if (::poll(&pf, 1, 5000) <= 0) { *err = "handshake timeout"; return hs::failed; }
         const ssize_t k = ::recv(fd, buf, sizeof(buf), 0);
-        if (k <= 0) { *err = "peer closed during handshake"; return false; }
+        if (k <= 0) { *err = "peer closed during handshake"; return hs::failed; }
         req.append(buf, (size_t) k);
     }
 
@@ -251,14 +266,7 @@ inline bool handshake(int fd, std::string * path, std::string * err) {
 
     const std::string key = value_of("sec-websocket-key");
     if (low.find("upgrade: websocket") == std::string::npos || key.empty()) {
-        const char * body = "gemma-live realtime: connect with a WebSocket client\n";
-        char resp[512];
-        const int n = snprintf(resp, sizeof(resp),
-            "HTTP/1.1 426 Upgrade Required\r\nContent-Length: %zu\r\n"
-            "Connection: close\r\n\r\n%s", strlen(body), body);
-        send_all(fd, resp, (size_t) n);
-        *err = "not a websocket upgrade";
-        return false;
+        return hs::plain_http;      // caller serves it
     }
 
     static const char MAGIC[] = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
@@ -272,7 +280,7 @@ inline bool handshake(int fd, std::string * path, std::string * err) {
         "HTTP/1.1 101 Switching Protocols\r\n"
         "Upgrade: websocket\r\nConnection: Upgrade\r\n"
         "Sec-WebSocket-Accept: %s\r\n\r\n", accept.c_str());
-    if (!send_all(fd, resp, (size_t) n)) { *err = "handshake write failed"; return false; }
+    if (!send_all(fd, resp, (size_t) n)) { *err = "handshake write failed"; return hs::failed; }
 
     int one = 1;
     setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));  // audio deltas are latency-critical
@@ -281,7 +289,7 @@ inline bool handshake(int fd, std::string * path, std::string * err) {
     // mid-reply would take the server down with it. send() returns EPIPE
     // instead, which the framing layer reports as a dead connection.
     setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
-    return true;
+    return hs::upgraded;
 }
 
 } // namespace ws
