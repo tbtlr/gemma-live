@@ -154,10 +154,6 @@ body.voice #mic   { display: none; }
    be visible or the orb just sits there looking fine. */
 #vstate { color: var(--destructive); font-size: 13px; }
 #vstate:empty { display: none; }
-#vsaid {
-  max-width: min(90vw, 34rem); text-align: center; min-height: 3.4em;
-  color: var(--foreground); font-size: 17px; line-height: 1.5; padding: 0 8px;
-}
 
 /* Mute and end sit inside the composer, right-aligned beside the other
    affordances, so voice mode adds controls to the box rather than building
@@ -184,7 +180,6 @@ body.voice #composer:not(.typing) .round { display: grid; }
   <div id="voice">
     <canvas id="orb"></canvas>
     <div id="vstate"></div>
-    <div id="vsaid"></div>
   </div>
 </main>
 
@@ -225,7 +220,7 @@ const BARGE_RMS = 0.02, BARGE_HOLD = 3;
 let ws, ctx, mic, inAn, outAn, outGain;
 let playCursor = 0, sources = [], loudRun = 0;
 let speaking = false, voiceOn = false, muted = false, busy = false;
-let liveBot = null, vLive = '';
+let liveBot = null;
 
 // ── thread ────────────────────────────────────────────────────────────
 function addMsg(who, text, tagHtml) {
@@ -358,7 +353,6 @@ async function openVoice() {
   // Talking is the primary act here; the box is the alternative, so it says
   // what it is for rather than repeating the general invitation.
   $('#box').placeholder = 'Type';
-  $('#vsaid').textContent = '';
 
   try {
     mic = await navigator.mediaDevices.getUserMedia({
@@ -409,22 +403,24 @@ function onChunk(f32) {
     if (Math.sqrt(sum / f32.length) > BARGE_RMS) {
       if (++loudRun >= BARGE_HOLD) {
         ws.send(JSON.stringify({ type: 'response.cancel' }));
-        stopAudio(); loudRun = 0; commitVoiceReply(true);
+        stopAudio(); loudRun = 0; endVoiceReply(true);
       }
     } else loudRun = 0;
   }
   ws.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: toB64(f32) }));
 }
 
-// A finished (or interrupted) spoken reply joins the same thread the typed
-// ones are in — one model context means one conversation, and the UI should
-// not pretend otherwise.
-function commitVoiceReply(interrupted) {
-  if (vLive.trim()) {
-    const m = addMsg('bot', vLive.trim() + (interrupted ? ' …' : ''), VOICE_TAG);
-    m.querySelector('.body').classList.remove('cursor');
-  }
-  vLive = ''; liveBot = null;
+// A spoken reply is written into the same thread the typed ones are in, as
+// it arrives rather than at the end. One model context means one
+// conversation; streaming it means a reply cut short is already saved
+// instead of living in a buffer that gets discarded.
+function endVoiceReply(interrupted) {
+  if (!liveBot) return;
+  const body = liveBot.querySelector('.body');
+  body.classList.remove('cursor');
+  if (!body.textContent.trim()) liveBot.remove();        // nothing was ever said
+  else if (interrupted) body.textContent += ' …';
+  liveBot = null;
 }
 
 function connectWs() {
@@ -438,13 +434,17 @@ function connectWs() {
     switch (m.type) {
       case 'input_audio_buffer.speech_started':
       case 'input_audio_buffer.speech_stopped': break;   // the orb shows this
-      case 'response.created': vLive = ''; $('#vsaid').textContent = ''; break;
+      case 'response.created':
+        liveBot = addMsg('bot', '', VOICE_TAG);
+        liveBot.querySelector('.body').classList.add('cursor');
+        break;
       case 'response.output_audio_transcript.delta':
-        vLive += m.delta; $('#vsaid').textContent = vLive; break;
+        if (liveBot) liveBot.querySelector('.body').textContent += m.delta;
+        break;
       case 'response.output_audio.delta':
         enqueue(fromB64(m.delta)); break;
       case 'response.done':
-        commitVoiceReply(false);
+        endVoiceReply(false);
         break;
       case 'error':
         // Empty-buffer errors are routine chatter in a quiet room.
@@ -458,7 +458,7 @@ function connectWs() {
 
 function closeVoice() {
   voiceOn = false;
-  commitVoiceReply(true);
+  endVoiceReply(true);
   if (ws) ws.close();
   stopAudio();
   if (mic) mic.getTracks().forEach(t => t.stop());
@@ -466,7 +466,6 @@ function closeVoice() {
   ctx = null; inAn = outAn = null;
   document.body.classList.remove('voice');
   $('#box').placeholder = 'Ask anything';
-  $('#vsaid').textContent = '';
 }
 
 $('#mic').onclick  = () => voiceOn ? closeVoice() : openVoice();
