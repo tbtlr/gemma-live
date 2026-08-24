@@ -214,9 +214,13 @@ inline int recv_message(int fd, op * o, std::string * payload, int timeout_ms,
 // Send a complete plain HTTP response and be done with the connection.
 inline void send_http(int fd, const char * status, const char * content_type,
                       const std::string & body) {
-    char head[256];
+    char head[384];
+    // Access-Control-Allow-Origin: * lets a web UI on another origin (a Tauri
+    // webview's tauri://localhost, or a Vite dev server) read the response. The
+    // server only ever listens on loopback, so a wildcard is harmless here.
     const int n = snprintf(head, sizeof(head),
         "HTTP/1.1 %s\r\nContent-Type: %s\r\nContent-Length: %zu\r\n"
+        "Access-Control-Allow-Origin: *\r\n"
         "Cache-Control: no-store\r\nConnection: close\r\n\r\n",
         status, content_type, body.size());
     if (send_all(fd, head, (size_t) n)) send_all(fd, body.data(), body.size());
