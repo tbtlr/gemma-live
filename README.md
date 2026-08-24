@@ -361,10 +361,27 @@ lock because the other front end was mid-turn.
 
 The page logs its own half to the browser console — `ttft`, `ttfa` and total
 as the browser experienced them. The gap between the two `ttfa` numbers is
-transport plus the playback scheduler's lead, which the server cannot see.
-Measured here it is a few milliseconds, so a web turn that feels slow is
-almost always the end-of-turn silence (`--vad-silence`, 500 ms by default)
-rather than the pipe.
+transport plus the playback scheduler's lead, which the server cannot see;
+measured here it is a few milliseconds, so a turn that still feels slow is
+the end-of-turn silence (`--vad-silence`, 500 ms by default) rather than the
+pipe.
+
+Under `server_vad` the turn opens on speech onset, not at the end, so the
+audio encoder runs while you are still talking. Before that it did not, and
+the whole encode sat in front of the reply — 30 ms per second of speech,
+plus a tail finalise that pushed `ttft` up with it:
+
+```
+speech    ttfa buffered    ttfa streaming
+1.6 s        395 ms            288 ms
+4.9 s        506 ms            270 ms
+9.8 s        777 ms            363 ms
+```
+
+The cost is that the turn lock is held from speech onset to `response.done`,
+so a message typed mid-utterance waits — visible as `wait` in the stats
+line. Manual turn detection (`turn_detection: null`) has no onset to open
+on and still takes the encode at commit time.
 
 ### What it deliberately does not do
 

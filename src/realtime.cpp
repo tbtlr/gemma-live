@@ -207,7 +207,21 @@ struct rt_session {
     int  in_rate  = 24000;      // pcm16 rate the client sends (OpenAI default)
     int  out_rate = 24000;      // pcm16 rate we send back
 
-    std::vector<float> buf;     // pending input at GL_MIC_RATE
+    std::vector<float> buf;     // input not yet handed to the model
+
+    // A turn is opened as soon as speech starts, not when it ends, so the
+    // audio encoder runs WHILE the user talks instead of in front of the
+    // reply. Measured before this: encode cost ~30ms per second of speech,
+    // all of it serial after end-of-turn — 296ms for a 10s utterance, plus
+    // the tail finalise pushing ttft from 140 to 307ms. The desktop app
+    // never paid it because it pushes every 100ms during LISTENING.
+    //
+    // The turn lock is therefore held from speech onset to response.done. A
+    // typed message arriving mid-utterance waits, which the stats line
+    // reports as `wait` — the same serialisation the desktop has by nature,
+    // and the price of taking the encode off the critical path.
+    std::unique_lock<std::mutex> turn_lock;
+    bool turn_open = false;
     std::string        session_id = new_id("sess");
 
     // Live response state. `active` gates cancel; both are read from the
@@ -219,6 +233,43 @@ struct rt_session {
     uint64_t          audio_samples_sent = 0;
 
     rt_session(rt_conn & c, VoiceSession & v, const gl_opts & o) : conn(c), vs(v), O(o) {}
+
+    // Begin a turn and hand it everything buffered so far. Safe to call more
+    // than once; only the first call does anything.
+    bool open_turn() {
+        if (turn_open) return true;
+        turn_lock = std::unique_lock<std::mutex>(g_turn_mu);
+        if (!vs.begin_turn()) {
+            turn_lock.unlock();
+            conn.send_error("server_error", "session_error", vs.last_error());
+            return false;
+        }
+        turn_open = true;
+        return feed_model();
+    }
+
+    // Push buffered audio into the open turn. Encoding happens here, on the
+    // reader's cadence, rather than all at once at end-of-turn.
+    bool feed_model() {
+        if (!turn_open || buf.empty()) return true;
+        const bool ok = vs.push_audio(buf.data(), buf.size());
+        pushed_samples += buf.size();
+        buf.clear();
+        if (!ok) conn.send_error("server_error", "session_error", vs.last_error());
+        return ok;
+    }
+
+    // Throw away a turn that was opened but will not be answered.
+    void discard_turn() {
+        if (!turn_open) return;
+        vs.abort_turn();
+        vs.end_turn(/*speak=*/ false);   // rolls the KV back
+        turn_open = false;
+        pushed_samples = 0;
+        if (turn_lock.owns_lock()) turn_lock.unlock();
+    }
+
+    size_t pushed_samples = 0;
 
     // ── outbound ────────────────────────────────────────────────────────
     json session_object() const {
@@ -262,7 +313,7 @@ struct rt_session {
     // thread — response.cancel has to be able to arrive during this call.
     void run_turn() {
         const auto t_enter = std::chrono::steady_clock::now();
-        if (buf.empty()) {
+        if (buf.empty() && pushed_samples == 0) {
             conn.send_error("invalid_request_error", "input_audio_buffer_commit_empty",
                             "no audio in the buffer to respond to");
             return;
@@ -293,18 +344,20 @@ struct rt_session {
             {"output_index", 0}, {"content_index", 0},
             {"part", {{"type", "audio"}, {"transcript", ""}}}});
 
-        std::lock_guard<std::mutex> lk(g_turn_mu);
+        // Manual turn detection never saw a speech onset, so the turn opens
+        // here and takes the whole encode at once — the old behaviour.
+        const double tail_s = (double) buf.size() / GL_MIC_RATE;
+        const auto t_enc0 = std::chrono::steady_clock::now();
+        if (!open_turn()) { active.store(false); return; }
+        ms_encode = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - t_enc0).count();
         const auto t_go = std::chrono::steady_clock::now();
         first_audio_at  = {};
-        std::string err;
-        if (!vs.begin_turn() ||
-            !vs.push_audio(buf.data(), buf.size())) {
-            active.store(false);
-            conn.send_error("server_error", "session_error", vs.last_error());
-            return;
-        }
-        buf.clear();
+
         vs.end_turn();
+        turn_open = false;
+        pushed_samples = 0;
+        if (turn_lock.owns_lock()) turn_lock.unlock();
         active.store(false);
 
         const bool was_cancelled = cancelled.load();
@@ -335,6 +388,10 @@ struct rt_session {
                 return std::chrono::duration<double, std::milli>(b - a).count();
             };
             const auto now = std::chrono::steady_clock::now();
+            if (ms_encode >= 1.0) {
+                fprintf(stderr, "  [encode %.0f ms of tail (%.1f s not yet fed)]\n",
+                        ms_encode, tail_s);
+            }
             log_turn(was_cancelled ? "voice interrupted" : "voice", st, out_rate,
                      ms(t_enter, t_go), ms(t_enter, now),
                      first_audio_at.time_since_epoch().count()
@@ -365,6 +422,7 @@ struct rt_session {
     // Fires on the TTS worker thread, and may fire briefly after the LLM is
     // done — rt_conn::send is mutexed for exactly this reason.
     std::chrono::steady_clock::time_point first_audio_at{};
+    double ms_encode = 0;
 
     void on_audio(const float * pcm, size_t n) {
         if (cancelled.load()) return;         // client already stopped playback
@@ -429,6 +487,7 @@ struct rt_session {
             pcm16_to_float(bytes, f);
             resample_linear(f, in_rate, GL_MIC_RATE, rs);
             buf.insert(buf.end(), rs.begin(), rs.end());
+            if (turn_open) feed_model();   // encode as it arrives
 
             if (server_vad && !active.load()) {
                 switch (vad.feed(rs.data(), rs.size())) {
@@ -436,6 +495,8 @@ struct rt_session {
                         send_event("input_audio_buffer.speech_started", {
                             {"audio_start_ms", (int) (vad.onset_sample * 1000 / GL_MIC_RATE)},
                             {"item_id", new_id("item")}});
+                        // Start encoding now, while they are still speaking.
+                        open_turn();
                         break;
                     case gl_vad::eou::event::speech_stopped: {
                         send_event("input_audio_buffer.speech_stopped", {
@@ -454,6 +515,7 @@ struct rt_session {
         if (type == "input_audio_buffer.commit")  { commit(); return; }
 
         if (type == "input_audio_buffer.clear") {
+            discard_turn();      // a turn opened on speech onset is unwound
             buf.clear();
             vad.reset();
             send_event("input_audio_buffer.cleared");
@@ -597,6 +659,9 @@ static void serve_client(int fd, VoiceSession & vs, const gl_opts & O) {
     conn.dead.store(true);
     ::shutdown(fd, SHUT_RDWR);
     reader.join();
+    // A turn opened on speech onset but never finished would otherwise keep
+    // the turn lock for the life of the process.
+    S.discard_turn();
     conn.on_dead = nullptr;
     S.vad.shutdown();
     {
