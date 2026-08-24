@@ -79,11 +79,21 @@ main { flex: 1; overflow-y: auto; }
 .cursor::after { content: '▍'; opacity: .6; animation: blink 1.1s steps(2) infinite; }
 @keyframes blink { 50% { opacity: 0; } }
 
-#empty { color: var(--muted-foreground); text-align: center; padding: 12vh 0; }
+#empty { color: var(--muted-foreground); text-align: center; padding: 0 0 8px; }
+
+/* Empty thread: the greeting and the composer sit together in the middle of
+   the page and drop into place on the first message. The paired auto margins
+   split the free space above main and below footer, which centres the pair
+   without a wrapper element to add and then unwind. */
+body.blank main    { flex: 0 0 auto; margin-top: auto; overflow: visible; }
+body.blank footer  { margin-bottom: auto; }
+body.blank #thread { padding-top: 0; }
 #empty h2 { color: var(--foreground); font-size: 20px; font-weight: 600; margin: 0 0 6px; }
 
 /* ── composer ─────────────────────────────────────────────────────── */
-footer { flex: none; padding: 10px 16px calc(14px + env(safe-area-inset-bottom)); }
+/* A little more room below the composer than the hint used to leave, so
+   dropping it does not leave the box sitting on the window edge. */
+footer { flex: none; padding: 10px 16px calc(22px + env(safe-area-inset-bottom)); }
 #composer {
   max-width: 46rem; margin: 0 auto; display: flex; align-items: flex-end; gap: 8px;
   border: 1px solid var(--input); border-radius: 1.6rem; padding: 7px 7px 7px 16px;
@@ -111,8 +121,6 @@ footer { flex: none; padding: 10px 16px calc(14px + env(safe-area-inset-bottom))
   background-color: var(--muted); color: var(--muted-foreground); opacity: 1;
 }
 .icon.filled:disabled:hover { background-color: var(--muted); opacity: 1; }
-.hint { max-width: 46rem; margin: 8px auto 0; text-align: center;
-        font-size: 11px; color: var(--muted-foreground); }
 
 /* ── voice overlay ────────────────────────────────────────────────── */
 #voice {
@@ -168,8 +176,7 @@ footer { flex: none; padding: 10px 16px calc(14px + env(safe-area-inset-bottom))
       </svg>
     </button>
   </form>
-  <div class="hint">Text and voice share one conversation.</div>
-</footer>
+  </footer>
 
 <div id="voice">
   <canvas id="orb"></canvas>
@@ -202,7 +209,8 @@ let liveBot = null, vLive = '';
 
 // ── thread ────────────────────────────────────────────────────────────
 function addMsg(who, text, tagHtml) {
-  const e = $('#empty'); if (e) e.remove();
+  const e = $('#empty');
+  if (e) { e.remove(); document.body.classList.remove('blank'); }
   const m = document.createElement('div');
   m.className = 'msg ' + who;
   if (tagHtml) {
@@ -499,6 +507,7 @@ function draw() {
   g.beginPath(); g.arc(cx, cy, radius, 0, Math.PI * 2); g.stroke();
   g.globalAlpha = 1;
 }
+document.body.classList.add('blank');
 draw();
 sync();
 </script>
