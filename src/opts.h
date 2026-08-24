@@ -82,7 +82,6 @@ struct gl_opts {
     // rt — Realtime API server (gl-serve only)
     std::string rt_host  = "127.0.0.1";
     int         rt_port  = 8927;
-    std::string rt_ui    = "web/index.html";
 
     int         fup_timeout = 5000;
     int         fup_hops    = 3;
@@ -163,7 +162,6 @@ inline std::vector<gl_opt_def> gl_option_table(gl_opts & o) {
       {"--nod-dump",    's', &o.nod_dump,    "DIR",  "write the rendered clips there as WAV and exit"},
       {"--rt-host",     's', &o.rt_host,     "ADDR", "address to bind"},
       {"--rt-port",     'i', &o.rt_port,     "N",    "port to bind"},
-      {"--rt-ui",       's', &o.rt_ui,       "PATH", "web ui page to serve at /"},
 
       {"--fup-timeout", 'i', &o.fup_timeout, "MS",   "how long the follow-up window stays open"},
       {"--fup-hops",    'i', &o.fup_hops,    "N",    "100 ms hops of voice needed to continue"},

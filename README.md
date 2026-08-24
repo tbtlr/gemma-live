@@ -131,7 +131,7 @@ tune it. `--help` lists all of them with their defaults.
   vad   --vad-model --vad-silence --vad-empty --vad-debug
   nod   --nod-off --nod-phrases --nod-after --nod-gap --nod-mono
         --nod-per-turn --nod-len --nod-gain --nod-debug --nod-dump
-  rt    --rt-host --rt-port --rt-ui                (gl-serve only)
+  rt    --rt-host --rt-port                        (gl-serve only)
   fup   --fup-timeout --fup-hops --fup-gate
   brg   --brg-ratio --brg-floor --brg-sustain --brg-debug
 ```
@@ -233,54 +233,26 @@ server -> client   session.created/updated
 Event names follow the GA schema (`response.output_audio.delta`), not the
 older beta spelling (`response.audio.delta`).
 
-### Web UI
+### Text chat
 
-`gl-serve` serves a browser client at `/` on the same port that carries the
-audio session — chat and voice in one page, no install.
+`POST /api/chat` on the same port takes one message and streams the reply
+back over SSE:
 
 ```bash
-./build/gl-serve          # then open http://127.0.0.1:8927/
+curl -N -X POST http://127.0.0.1:8927/api/chat \
+     -H 'content-type: application/json' -d '{"message":"Hello"}'
 ```
 
-**Type** to chat: `POST /api/chat` streams the reply back over SSE, and
-synthesis is skipped entirely (`end_turn(speak=false)`), which is most of a
-turn's latency — a short reply comes back in ~120 ms.
+It shares the model context with the voice session, so the two are one
+conversation — ask something aloud, follow up in text, and the pronoun
+resolves. Synthesis is skipped (`end_turn(speak=false)`), which is most of
+a turn's latency: a short reply comes back in about 120 ms.
 
-**Press the wave** for voice mode: a full-screen view with an orb that
-animates whichever side has the floor, a live transcript, mute, and end.
-Speaking over Gemma cuts her off.
-
-Both share one model context, so they are genuinely one conversation — ask
-something aloud, then follow up by typing, and the pronoun resolves. Spoken
-replies land in the same thread as typed ones, tagged as voice.
-
-The page borrows llama.cpp's design tokens verbatim from
-`tools/ui/src/app.css` — shadcn neutral in oklch, one radius, light and
-dark — and its message layout: user messages right-aligned in a bubble,
-assistant replies full width and unboxed. The orb's two states are llama's
-own accent colours (`--chart-1` blue for listening, `--chart-3` gold for
-speaking) rather than invented ones.
-
-It is one file (`web/index.html`), served from disk so editing it and
-reloading needs no rebuild; `--rt-ui` points elsewhere.
-
-Two things worth knowing about how it works. The page owns echo
-cancellation via `getUserMedia`'s `echoCancellation` constraint — that is
-what makes the server's lack of a far-end reference correct rather than a
-gap, and it is the division of labour the Realtime API assumes. And
-barge-in is client-side, because the server only runs turn detection when
-no response is in flight; since the browser's AEC has already removed
-Gemma's voice from the mic, anything above the floor while she speaks is
-you talking over her.
-
-`/api/chat` deliberately takes ONE message rather than a transcript. The
-model keeps the conversation in its KV cache, so re-sending history would
-decode it again every turn and cost more the longer you talk — which is
-also why this is not `/v1/chat/completions`, whose schema is stateless by
-definition and would invite exactly that.
-
-Chrome and Safari treat `http://localhost` as a secure context, so the
-microphone works without TLS. Reaching it from another machine needs HTTPS.
+One message per request, not a transcript. The model keeps the
+conversation in its KV cache, so re-sending history would decode it again
+every turn and cost more the longer you talk — which is also why this is
+not `/v1/chat/completions`, whose schema is stateless by definition and
+would invite exactly that.
 
 ### What it deliberately does not do
 
