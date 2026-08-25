@@ -20,13 +20,3 @@ models/*.bin
 voices/*.gguf
 voices/*.bin
 
-# Vendored dependency checkouts — each is its own git repo, cloned by hand.
-# NOT submodules (unlike vendor/localvqe, which is tracked in .gitmodules).
-# Together they are ~2 GB, so keep them out of `git add -A`.
-#   vendor/CrispASR   — https://github.com/tbtlr/CrispASR @ gemma-live
-#       (fork of CrispStrobe/CrispASR). Upstream ALONE IS NOT ENOUGH: the
-#       streaming VibeVoice API (vibevoice_tts_stream_*), the DFN3 post-filter
-#       and the crispasr-tts target this project links live on that branch.
-#   vendor/llama.cpp  — https://github.com/tbtlr/llama.cpp @ gemma-live
-vendor/CrispASR/
-vendor/llama.cpp/

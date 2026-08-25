@@ -24,19 +24,17 @@ and it answers again without the wake word. Talk over a reply and it stops.
 
 ## Setup
 
-Three dependencies. Two are hand-cloned rather than submodules because they are
-~2 GB together, and both need a specific branch:
+Three dependencies, all submodules, ~2 GB together:
 
 ```bash
-git clone --branch gemma-live https://github.com/tbtlr/llama.cpp.git vendor/llama.cpp
-git clone --branch gemma-live https://github.com/tbtlr/CrispASR.git vendor/CrispASR
-git submodule update --init --recursive vendor/localvqe
+git submodule update --init --recursive
 ```
 
-Upstream will not work for either fork. The streaming `mtmd_audio_stream_*` API
-and the `load_vision`/`load_audio` params live only on that llama.cpp branch;
-the streaming VibeVoice API and the `crispasr-tts` target live only on that
-CrispASR branch.
+Two of them are forks pinned to a branch, and upstream will not work for
+either. The streaming `mtmd_audio_stream_*` API and the `load_vision`/
+`load_audio` params live only on that llama.cpp branch; the streaming
+VibeVoice API and the `crispasr-tts` target live only on that CrispASR
+branch.
 
 Build the two out-of-tree pieces, fetch the weights (~5.2 GB), then build:
 

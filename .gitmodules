@@ -3,3 +3,11 @@
 	url = https://github.com/localai-org/LocalVQE.git
 	branch = main
 	ignore = dirty
+[submodule "vendor/llama.cpp"]
+	path = vendor/llama.cpp
+	url = https://github.com/tbtlr/llama.cpp.git
+	branch = gemma-live
+[submodule "vendor/CrispASR"]
+	path = vendor/CrispASR
+	url = https://github.com/tbtlr/CrispASR.git
+	branch = gemma-live

@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # ─────────────────────────────────────────────────────────────────────────
-# Dependency locations. Both live under vendor/ by default; override on the
+# Dependency locations. Both are submodules under vendor/; override on the
 # command line (-DGL_LLAMA_DIR=... / -DGL_CRISPASR_DIR=...) to build against
 # a checkout elsewhere.
 #
@@ -22,7 +22,7 @@ if (NOT EXISTS "${GL_LLAMA_DIR}/CMakeLists.txt")
     message(FATAL_ERROR
         "llama.cpp fork not found at ${GL_LLAMA_DIR}.\n"
         "First-time setup (see also tools/fetch-models.sh for the weights):\n"
-        "  git clone --branch gemma-live https://github.com/tbtlr/llama.cpp.git vendor/llama.cpp")
+        "  git submodule update --init --recursive")
 endif()
 
 # Pull in the llama.cpp fork. Provides ggml, llama, llama-common,
