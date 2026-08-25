@@ -26,12 +26,6 @@
      to sit with it. Bubbles are pills and icons are circles; those are the
      only other shapes. (--radius came with the palette and is unused.) */
   --radius-box: 1.6rem;
-  /* A thumbnail nested inside the composer takes the CONCENTRIC radius, not
-     the same one: curves that share a centre have to differ by the inset
-     between them, or the inner corner looks wrong. 11px is the composer's
-     7px padding plus the tray's own 4px. At 56px square the box radius
-     would have made them circles. */
-  --radius-inner: calc(var(--radius-box) - 11px);
   --radius: 0.625rem;
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
@@ -123,7 +117,7 @@ main { flex: 1; overflow-y: auto; }
   white-space: pre-wrap; overflow-wrap: anywhere;
 }
 .msg.bot .body { width: 100%; line-height: 1.75; white-space: pre-wrap; overflow-wrap: anywhere; }
-.msg.bot .info { font-size: 11px; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+.msg.bot .info { font-size: 11px; color: var(--muted-foreground); font-variant-numeric: tabular-nums; margin-top: 6px; }
 .cursor::after { content: '▍'; opacity: .6; animation: blink 1.1s steps(2) infinite; }
 /* Waiting on the transcript: a bubble the width of a few words, pulsing, so
    the turn is visible before the words are. */
@@ -281,20 +275,17 @@ body.dictating #tray, body.voice #tray { display: none; }
    the image, which is also what stops the corner clipping a bite out of a
    button that deliberately sits on it. */
 .thumb { position: relative; width: 112px; height: 112px; flex: none; }
+/* Concentric with the composer: its radius less the 7px of padding the
+   thumbnail is inset by, so the two curves stay parallel instead of the
+   inner one bulging. */
 .thumb img { width: 100%; height: 100%; object-fit: cover; display: block;
-             border-radius: var(--radius-inner); }
+             border-radius: calc(var(--radius-box) - 7px); }
 /* Hover only, so a tray of attachments reads as pictures and not as a row of
    controls. Plain :focus, not :focus-visible — whether the latter fires is a
    browser heuristic about how focus arrived, and the failure mode is a
    button you have tabbed to and cannot see. */
 .thumb button {
-  /* Measured off ChatGPT's, normalised to the picture's width: the chip's
-     centre sits 7.0% of the width in from the right edge and 2.1% DOWN from
-     the top. It is not symmetric — it overhangs the top and is all but flush
-     on the right, which is why neither straddling both axes nor insetting
-     both ever matched. On a 112px thumbnail with a 14px chip that is
-     top -5, right 1. */
-  position: absolute; top: -5px; right: 1px; width: 14px; height: 14px;
+  position: absolute; top: 0; right: 0; width: 13px; height: 13px;
   border: 0; border-radius: 50%; cursor: pointer; padding: 0;
   /* Fixed light chip, not --primary: this sits on top of someone's
      photograph, not on a themed surface, so it must not invert with the
@@ -335,7 +326,7 @@ body.dictating #tray, body.voice #tray { display: none; }
    1.25rem is about half the height of a one-line bubble, so it still reads
    as a pill, and 20 + 11.2 fits inside 42 with no scaling at all. */
 .msg .shots + .body {
-  border-radius: 1.25rem 0.7rem 1.25rem 1.25rem;
+  border-radius: 1.25rem 0.5rem 1.25rem 1.25rem;
 }
 .msg .body:empty { display: none; }
 /* Stays put while you type, unlike mic and voice: a caption for the image
