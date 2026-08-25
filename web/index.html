@@ -616,23 +616,12 @@ function drawWave() {
     const idx = dictAmps.length - cols + i;
     const amp = idx >= 0 ? (dictAmps[idx] || 0) : 0;
 
-    // The dot goes down first and unconditionally: a column is never blank,
-    // whatever the level says. A row of dots is the strip's resting state.
+    // A bar or a dot, never both stacked: the bars are translucent, so a dot
+    // left underneath one shows through as a bright bead at the waist.
     //
-    // As an explicit filled circle, NOT a round cap on a zero-length stroke.
-    // Blink paints that degenerate subpath, WebKit skips it, so the pauses
-    // came out empty in Safari however the classifier had scored them. An
-    // arc has no such ambiguity.
-    const swell = 0.5 + 0.5 * Math.sin(2 * Math.PI *
-                  (x + t * DOT_SPEED) / DOT_WAVELEN);
-    wctx.fillStyle   = dim;
-    wctx.globalAlpha = 0.5 + swell * 0.4;
-    wctx.beginPath();
-    wctx.arc(x, mid, R * (0.8 + swell * 0.4), 0, Math.PI * 2);
-    wctx.fill();
-
-    // Then the bar over it, once it is actually taller than the dot it would
-    // otherwise hide inside itself.
+    // The dot is the fallback branch rather than the special case, which is
+    // what keeps a column from ever coming out blank — `len > R` is false
+    // for a NaN or a missing sample too, so those land on the dot as well.
     const len = amp * (mid - R);
     if (len > R) {
       wctx.strokeStyle = fg;
@@ -643,6 +632,18 @@ function drawWave() {
       wctx.moveTo(x, mid - len);
       wctx.lineTo(x, mid + len);
       wctx.stroke();
+    } else {
+      // An explicit filled circle, NOT a round cap on a zero-length stroke.
+      // Blink paints that degenerate subpath, WebKit skips it, so the pauses
+      // came out empty in Safari however the classifier had scored them. An
+      // arc has no such ambiguity.
+      const swell = 0.5 + 0.5 * Math.sin(2 * Math.PI *
+                    (x + t * DOT_SPEED) / DOT_WAVELEN);
+      wctx.fillStyle   = dim;
+      wctx.globalAlpha = 0.5 + swell * 0.4;
+      wctx.beginPath();
+      wctx.arc(x, mid, R * (0.8 + swell * 0.4), 0, Math.PI * 2);
+      wctx.fill();
     }
   }
   wctx.globalAlpha = 1;
