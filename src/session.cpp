@@ -710,7 +710,8 @@ bool VoiceSession::push_image(const unsigned char * bytes, size_t len) {
     if (!bytes || len == 0) { s->error = "push_image: empty image"; return false; }
     if (!s->in_turn)      { s->error = "push_image: no turn in progress"; return false; }
     if (!s->turn_is_text) { s->error = "push_image: this is an audio turn"; return false; }
-    if (!s->vision)       { s->error = "push_image: vision is not enabled"; return false; }
+    if (!s->vision)       { s->error = "push_image: vision is not enabled — start gl-serve with --llm-vision";
+                            return false; }
 
     // Decode the file (stb_image under the hood — png, jpeg, and friends).
     auto wrap = mtmd_helper_bitmap_init_from_buf(s->ctx_mtmd.get(), bytes, len,

@@ -1225,6 +1225,13 @@ int main(int argc, char ** argv) {
                     "Access-Control-Max-Age: 86400\r\n"
                     "Content-Length: 0\r\nConnection: close\r\n\r\n";
                 ws::send_all(fd, pf, strlen(pf));
+            } else if (req.method == "GET" && req.path == "/api/config") {
+                // What this server can actually do, so the page stops
+                // offering what it cannot. Without this the UI showed an
+                // attach button on a build with no vision tower, and the
+                // only way to find out was the error that came back.
+                ws::send_http(fd, "200 OK", "application/json",
+                              json({{"vision", O.llm_vision}}).dump());
             } else if (req.method == "POST" && req.path == "/api/chat") {
                 serve_chat(fd, *vs, req.body);
             } else if (req.method == "POST" && req.path == "/api/transcribe") {

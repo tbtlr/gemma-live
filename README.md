@@ -390,7 +390,9 @@ curl -N -X POST http://127.0.0.1:8927/api/chat \
 
 The web UI attaches them with the image button, a drag onto the page, or a
 paste — and shrinks anything over 1024px before upload, since the encoder
-throws the extra pixels away anyway.
+throws the extra pixels away anyway. It asks `GET /api/config` first and
+hides the button when the answer is `{"vision": false}`, so a server started
+without the flag does not offer something that can only fail.
 
 Two things to expect. An image is a few hundred tokens of prefix (the turn
 log reports `img N tok`) and, unlike audio, there is nothing to overlap the
