@@ -21,6 +21,8 @@
 extern "C" {
 #include "moonshine_streaming.h"
 #include "moonshine.h"
+#include "parakeet.h"
+#include "kyutai_stt.h"
 }
 
 #include <chrono>
@@ -92,6 +94,8 @@ static bool read_wav_16k(const char * path, std::vector<float> & out) {
 struct stt {
     moonshine_streaming_context * s = nullptr;
     moonshine_context           * p = nullptr;
+    parakeet_context            * k = nullptr;
+    kyutai_stt_context          * y = nullptr;
     bool init(const char * path) {
         auto pr = moonshine_streaming_context_default_params();
         pr.n_threads = 2; pr.verbosity = 0; pr.use_gpu = false; pr.temperature = 0.0f;
@@ -100,16 +104,27 @@ struct stt {
         moonshine_init_params ip{};
         ip.model_path = path; ip.tokenizer_path = nullptr; ip.n_threads = 2;
         p = moonshine_init_with_params(ip);
-        return p != nullptr;
+        if (p) return true;
+        auto kp = parakeet_context_default_params();
+        kp.n_threads = 2; kp.verbosity = 0; kp.use_gpu = false;
+        k = parakeet_init_from_file(path, kp);
+        if (k) return true;
+        y = kyutai_stt_init_from_file(path, kyutai_stt_context_default_params());
+        return y != nullptr;
     }
     std::string run(const std::vector<float> & a) {
         if (s) { char * t = moonshine_streaming_transcribe(s, a.data(), (int) a.size());
                  std::string r = t ? t : ""; if (t) free(t); return r; }
         if (p) { const char * t = moonshine_transcribe(p, a.data(), (int) a.size());
                  return t ? std::string(t) : std::string(); }
+        if (k) { char * t = parakeet_transcribe(k, a.data(), (int) a.size());
+                 std::string r = t ? t : ""; if (t) free(t); return r; }
+        if (y) { char * t = kyutai_stt_transcribe(y, a.data(), (int) a.size());
+                 std::string r = t ? t : ""; if (t) free(t); return r; }
         return {};
     }
-    const char * kind() const { return s ? "streaming" : "plain"; }
+    const char * kind() const { return s ? "moonshine/streaming" : p ? "moonshine"
+                                     : k ? "parakeet" : y ? "kyutai" : "none"; }
 };
 
 int main(int argc, char ** argv) {

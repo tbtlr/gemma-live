@@ -40,10 +40,11 @@ ITEMS=(
   # dirname(model)/tokenizer.bin, so it has to sit beside the GGUF or startup
   # fails with a message about the model rather than the tokenizer.
   "models/moonshine-streaming-tiny-q4_k.gguf|$HF/cstr/moonshine-streaming-tiny-GGUF/resolve/main/moonshine-streaming-tiny-q4_k.gguf"
-  # Transcription (gl-serve --stt-model). The base model is both more
-  # accurate and ~4x faster than the streaming tiny above, which re-runs
-  # overlapping encoder windows that single-shot transcription does not use.
-  "models/moonshine-base-q4_k.gguf|$HF/cstr/moonshine-base-GGUF/resolve/main/moonshine-base-q4_k.gguf"
+  # Transcription (gl-serve --stt-model). Multilingual, unlike the wake-word
+  # model above: the wake phrase is fixed English, but dictation and the
+  # thread's user rows are whatever the speaker said. Every English-only
+  # model tried here returned gibberish on German, French and Spanish.
+  "models/parakeet-tdt-0.6b-v3-q4_k.gguf|$HF/cstr/parakeet-tdt-0.6b-v3-GGUF/resolve/main/parakeet-tdt-0.6b-v3-q4_k.gguf"
   "models/tokenizer.bin|$HF/cstr/moonshine-streaming-tiny-GGUF/resolve/main/tokenizer.bin"
 
   # ── End-of-utterance / followup VAD

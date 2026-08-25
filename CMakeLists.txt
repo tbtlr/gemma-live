@@ -268,7 +268,10 @@ set_target_properties(gl-offline PROPERTIES
 # so that speaking the protocol costs no new third-party dependency.
 # ─────────────────────────────────────────────────────────────────────────
 add_executable(gl-serve src/realtime.cpp)
-target_include_directories(gl-serve PRIVATE ${GL_LLAMA_DIR}/vendor)   # nlohmann/json.hpp
+target_include_directories(gl-serve PRIVATE
+    ${GL_LLAMA_DIR}/vendor            # nlohmann/json.hpp
+    ${GL_LLAMA_DIR}/ggml/include      # gguf.h — read general.architecture
+)
 target_link_libraries(gl-serve PRIVATE gl-session)
 if (NOT APPLE)
     target_link_libraries(gl-serve PRIVATE crypto)   # OpenSSL SHA1 for the WebSocket handshake (ws.h)

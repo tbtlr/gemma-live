@@ -57,7 +57,11 @@
 extern "C" {
 #include "moonshine_streaming.h"
 #include "moonshine.h"
+#include "parakeet.h"
+#include "kyutai_stt.h"
 }
+
+#include "gguf.h"
 
 #include "opts.h"
 #include "session.h"
@@ -699,15 +703,57 @@ struct stt_engine {
     // not interchangeable — handing moonshine-base to the streaming loader
     // gets "invalid model metadata" — so --stt-model tries one and then the
     // other rather than making the caller know which they have.
-    moonshine_streaming_context * sctx = nullptr;   // streaming variants
-    moonshine_context           * pctx = nullptr;   // plain variants
+    moonshine_streaming_context * sctx = nullptr;   // moonshine, streaming
+    moonshine_context           * pctx = nullptr;   // moonshine, plain
+    parakeet_context            * kctx = nullptr;   // parakeet TDT/CTC/RNNT
+    kyutai_stt_context          * yctx = nullptr;   // kyutai stt
     std::mutex mu;                 // one context, and requests can overlap
 
-    bool loaded() const { return sctx || pctx; }
-    const char * kind() const { return sctx ? "streaming" : pctx ? "plain" : "none"; }
+    bool loaded() const { return sctx || pctx || kctx || yctx; }
+    const char * kind() const {
+        return sctx ? "moonshine/streaming" : pctx ? "moonshine"
+             : kctx ? "parakeet"            : yctx ? "kyutai" : "none";
+    }
+
+    // Which runtime a file belongs to, from the GGUF metadata rather than by
+    // trying loaders until one accepts. It is not a hypothetical: handed a
+    // kyutai model, parakeet_init_from_file SUCCEEDS and then transcribes
+    // nothing — a silent wrong answer, which is the worst kind.
+    static std::string arch_of(const std::string & path) {
+        gguf_init_params gp{};
+        gp.no_alloc = true;
+        gp.ctx      = nullptr;
+        gguf_context * g = gguf_init_from_file(path.c_str(), gp);
+        if (!g) return {};
+        const int64_t k = gguf_find_key(g, "general.architecture");
+        std::string a = k >= 0 ? gguf_get_val_str(g, k) : "";
+        gguf_free(g);
+        return a;
+    }
 
     bool init(const std::string & path, int threads, int verbosity) {
         if (path.empty()) return false;
+        const std::string arch = arch_of(path);
+        if (arch.empty()) {
+            fprintf(stderr, "stt: %s is not a readable GGUF\n", path.c_str());
+            return false;
+        }
+        if (arch == "parakeet") {
+            auto kp = parakeet_context_default_params();
+            kp.n_threads = threads > 0 ? threads : 2;
+            kp.verbosity = verbosity >= 2 ? 1 : 0;
+            kp.use_gpu   = false;
+            kctx = parakeet_init_from_file(path.c_str(), kp);
+            return kctx != nullptr;
+        }
+        if (arch == "kyutai-stt") {
+            yctx = kyutai_stt_init_from_file(path.c_str(), kyutai_stt_context_default_params());
+            return yctx != nullptr;
+        }
+        if (arch != "moonshine" && arch != "moonshine_streaming") {
+            fprintf(stderr, "stt: no runtime for architecture \"%s\"\n", arch.c_str());
+            return false;
+        }
         auto params = moonshine_streaming_context_default_params();
         params.n_threads   = threads > 0 ? threads : 2;
         params.verbosity   = verbosity >= 2 ? 1 : 0;
@@ -726,6 +772,8 @@ struct stt_engine {
     void shutdown() {
         if (sctx) { moonshine_streaming_free(sctx); sctx = nullptr; }
         if (pctx) { moonshine_free(pctx);           pctx = nullptr; }
+        if (kctx) { parakeet_free(kctx);            kctx = nullptr; }
+        if (yctx) { kyutai_stt_free(yctx);          yctx = nullptr; }
     }
     // Longest audio handed to the model in one call.
     //
@@ -751,6 +799,16 @@ struct stt_engine {
             // The plain API returns a pointer it owns; copy, do not free.
             const char * t = moonshine_transcribe(pctx, pcm, (int) n);
             return t ? std::string(t) : std::string();
+        }
+        if (kctx) {
+            char * t = parakeet_transcribe(kctx, pcm, (int) n);
+            if (!t) return {};
+            std::string out(t); free(t); return out;
+        }
+        if (yctx) {
+            char * t = kyutai_stt_transcribe(yctx, pcm, (int) n);
+            if (!t) return {};
+            std::string out(t); free(t); return out;
         }
         return {};
     }

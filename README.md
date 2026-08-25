@@ -132,9 +132,6 @@ tune it. `--help` lists all of them with their defaults.
   nod   --nod-off --nod-phrases --nod-after --nod-gap --nod-mono
         --nod-per-turn --nod-len --nod-gain --nod-debug --nod-dump
   stt   --stt-model --stt-threads                  (gl-serve only)
-        moonshine-base-q4_k is both faster and more accurate than the
-        streaming tiny — the streaming encoder re-runs overlapping
-        windows, wasted work for single-shot transcription.
   rt    --rt-host --rt-port --rt-ui                (gl-serve only)
   rt    --rt-host --rt-port --rt-ui                (gl-serve only)
   fup   --fup-timeout --fup-hops --fup-gate
@@ -425,6 +422,39 @@ half-finished reply in context teaches the model to truncate itself on later
 turns.
 
 **pcm16 only.** No G.711, no Opus.
+
+## Choosing a transcription model
+
+`--stt-model` takes moonshine, parakeet or kyutai weights and dispatches on
+the GGUF's `general.architecture` — not by trying loaders until one accepts,
+because parakeet's loader *succeeds* on a kyutai model and then transcribes
+nothing, which is a silent wrong answer rather than an error.
+
+The wake word and transcription want different models, and the reason is
+language. The wake phrase is fixed English, so `kwd` can use the smallest
+thing that works. Dictation and the thread's user rows are whatever the
+speaker actually said. Measured on the same four clips:
+
+```
+                          en          de / fr / es
+moonshine-base    45 MB   good        gibberish
+parakeet 110m    121 MB   good        gibberish
+parakeet 0.6b-v3 399 MB   good        correct, with punctuation
+kyutai-stt-1b    636 MB   empty       partial, truncated
+```
+
+So `parakeet-tdt-0.6b-v3` is the default despite being 8x the size and 3x
+the time of moonshine-base (170-240 ms against 40-80 ms for one to three
+seconds). Transcription is off the critical path — the benchmark below puts
+it 11 ms from the audio path at end-of-turn — so its cost buys languages
+rather than latency.
+
+English-only and short of memory? `--stt-model models/moonshine-base-q4_k.gguf`
+is a tenth the size and three times faster.
+
+Kyutai is wired up but did poorly here, and the test was not fair to it: it
+is a streaming model driven single-shot, and `stt-1b` is the en/fr variant
+being asked for German and Spanish.
 
 ## Audio in, or transcribe first?
 

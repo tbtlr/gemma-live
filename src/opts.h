@@ -80,7 +80,7 @@ struct gl_opts {
     bool        nod_debug     = false;
     std::string nod_dump;
     // stt — dictation: speech in, text back, no conversation turn
-    std::string stt_model   = "models/moonshine-base-q4_k.gguf";
+    std::string stt_model   = "models/parakeet-tdt-0.6b-v3-q4_k.gguf";
     int         stt_threads = 2;
 
     // rt — Realtime API server (gl-serve only)
@@ -165,8 +165,8 @@ inline std::vector<gl_opt_def> gl_option_table(gl_opts & o) {
       {"--nod-gain",    'f', &o.nod_gain,    "X",    "level relative to speech"},
       {"--nod-debug",   'b', &o.nod_debug,   nullptr,"log every nod and every near miss"},
       {"--nod-dump",    's', &o.nod_dump,    "DIR",  "write the rendered clips there as WAV and exit"},
-      {"--stt-model",   's', &o.stt_model,   "PATH", "moonshine model for /api/transcribe (empty to disable)"},
-      {"--stt-threads", 'i', &o.stt_threads, "N",    "moonshine threads"},
+      {"--stt-model",   's', &o.stt_model,   "PATH", "transcription model; moonshine, parakeet or kyutai"},
+      {"--stt-threads", 'i', &o.stt_threads, "N",    "transcription threads"},
 
       {"--rt-host",     's', &o.rt_host,     "ADDR", "address to bind"},
       {"--rt-port",     'i', &o.rt_port,     "N",    "port to bind"},
