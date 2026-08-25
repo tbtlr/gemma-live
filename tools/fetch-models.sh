@@ -52,8 +52,7 @@ ITEMS=(
 
   # ── TTS. The voice prompt is ours, not upstream's — it is a locally-created
   # prompt hosted alongside the project. Other voices for this model live in
-  # cstr/vibevoice-realtime-0.5b-GGUF; point GEMMA_LIVE_TTS_VOICE at one to
-  # switch.
+  # cstr/vibevoice-realtime-0.5b-GGUF; point --tts-voice at one to switch.
   "models/vibevoice-realtime-0.5b-q4_k.gguf|$HF/cstr/vibevoice-realtime-0.5b-GGUF/resolve/main/vibevoice-realtime-0.5b-q4_k.gguf"
   "voices/vibevoice-voice-en-Gemma_woman.gguf|$HF/tbtlr/gemma-live/resolve/main/vibevoice-voice-en-Gemma_woman.gguf"
 )

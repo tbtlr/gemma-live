@@ -660,7 +660,7 @@ struct cli_keyword_detector {
     moonshine_streaming_stream  * stream = nullptr;
     std::thread                   worker;
     std::atomic<bool>             running{false};
-    bool                          debug = false;  // GEMMA_LIVE_KWD_DEBUG=1
+    bool                          debug = false;  // --kwd-debug
 
     // Track moonshine's emission counter so we only re-evaluate the
     // transcript on actual new emissions (not on stale repeats).
@@ -758,7 +758,7 @@ struct cli_keyword_detector {
         // CPU by default: measured identical to Metal for this model
         // (57.8% vs 58.1% of a core), and keeping it off the GPU leaves that
         // for the LLM and the TTS diffusion, which are the latency-critical
-        // consumers. Set GEMMA_LIVE_KWD_USE_GPU=1 to put it back.
+        // consumers. Pass --kwd-gpu to put it back.
         params.use_gpu   = use_gpu;
         params.verbosity = 0;
         ctx = moonshine_streaming_init_from_file(model_path, params);
@@ -1262,9 +1262,9 @@ int main(int argc, char ** argv) {
     // and you must swap this too, or acceptance collapses and it turns into a
     // slowdown. See SessionConfig for the measurements behind n_draft=1.
     //
-    //   GEMMA_LIVE_MTP=0          disable
-    //   GEMMA_LIVE_MTP_MODEL=...  draft head path
-    //   GEMMA_LIVE_MTP_DRAFT=N    tokens drafted per step (1 measured best)
+    //   --mtp-off        disable
+    //   --mtp-model      draft head path
+    //   --mtp-draft N    tokens drafted per step (1 measured best)
     //
     // A missing or unloadable head is not fatal — the session logs and falls
     // back to one token per decode.
@@ -1317,7 +1317,7 @@ int main(int argc, char ** argv) {
         } else {
             fprintf(stderr,
                     "ERR: EOU VAD init failed (%s). Without it there's no way to know\n"
-                    "     when the user has stopped speaking. Set GEMMA_LIVE_VAD_MODEL\n"
+                    "     when the user has stopped speaking. Pass --vad-model\n"
                     "     to a valid firered-vad GGUF file.\n", vad_path.c_str());
             return 1;
         }
@@ -1828,7 +1828,7 @@ int main(int argc, char ** argv) {
             const double audio_s = (double) st.n_tts_samples / (double) GL_TTS_RATE;
             const double rtf = (audio_s > 0.0) ? (st.ms_tts_wall / 1000.0) / audio_s : 0.0;
             // Acceptance rate is the number to watch when tuning
-            // GEMMA_LIVE_MTP_DRAFT; omitted entirely when MTP is off.
+            // --mtp-draft; omitted entirely when MTP is off.
             const int underruns = g_underruns.exchange(0);
             char ur_note[32] = "";
             if (underruns > 0) snprintf(ur_note, sizeof(ur_note), " | UNDERRUN x%d", underruns);

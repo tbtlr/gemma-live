@@ -339,6 +339,14 @@ one sentence, no markdown, numbers in words. `gl-serve` answers typed turns
 through the same session, so it defaults to `prompts/chat.txt` instead;
 `--sys-prompt` overrides either.
 
+`prompts/echo.txt` is a third, for diagnosis rather than use: it tells the
+model to repeat what it heard verbatim and nothing else, which turns a turn
+into a straight read-back of the audio path.
+
+```bash
+./build/gl-serve --sys-prompt prompts/echo.txt
+```
+
 The web prompt cannot simply be the longer one. A session holds one system
 prompt and voice mode shares it, so spoken replies would become paragraphs
 read aloud — the exact thing the voice prompt exists to prevent. It splits

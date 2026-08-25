@@ -425,7 +425,7 @@ std::unique_ptr<VoiceSession> VoiceSession::create(const SessionConfig & cfg,
 
     // Pin compute to performance cores. The default (-1 → hardware_concurrency)
     // includes efficiency cores on Apple Silicon, which slows the slowest
-    // thread and stalls the whole batch. Override via GEMMA_LIVE_N_THREADS.
+    // thread and stalls the whole batch. Override with --llm-threads.
     {
         int nt = (cfg.n_threads > 0) ? cfg.n_threads : detect_perf_cores();
         s->params.cpuparams.n_threads       = nt;
