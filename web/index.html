@@ -430,19 +430,34 @@ async function sendText(text) {
 // two are mutually exclusive and sharing would mean rebuilding the graph on
 // every switch.
 let dictCtx = null, dictMic = null, dictNode = null;
-let dictChunks = [], dictLevels = [], dictOn = false;
+let dictChunks = [], dictAmps = [], dictOn = false;
 
-// Levels per 100 ms chunk. This sets the scroll speed: the strip holds
+// Amplitude samples per 100 ms chunk. This sets the scroll speed: the strip holds
 // ~60 dots, so 5 slices a chunk showed barely a second of audio and raced.
 // 2 gives ~20 a second — three seconds across the strip, and each dot still
 // spans 50 ms, well inside a syllable, so it stays lively rather than
 // averaging speech into a flat line.
 const LEVEL_SLICES = 2;
 
-// RMS below which a slice is silence rather than quiet speech. getUserMedia
-// runs noise suppression, so real silence sits very low; this is above that
-// and well under a spoken syllable.
-const SILENCE_FLOOR = 0.006;
+// Room tone, tracked live. A fixed RMS cut cannot separate silence from
+// speech here: autoGainControl normalises the signal per microphone and per
+// room, so the level of "quiet" after gain is a property of the environment,
+// not a constant. Too low and silence draws as speech; too high and the
+// first syllable is clipped off.
+let noiseFloor = 0;
+// How fast the floor chases the level, by case. Drop onto a new quiet level
+// in a few slices; follow the room upward briskly while what we are hearing
+// is NOT speech; and during speech only creep, so a long steady vowel cannot
+// drag the floor up behind it. The creep is not optional -- without it a
+// floor left too low by a dropout would call room tone speech forever, and
+// never see a non-speech slice to correct itself with.
+const NF_FALL = 0.5, NF_TRACK = 0.15, NF_RISE = 0.004;
+// Speech has to clear the floor by this much. Room tone wanders by tens of
+// percent between slices; a spoken syllable is several times louder.
+const SPEECH_RATIO = 2.2;
+// ...and by this absolute margin too, or a digitally silent input — floor 0,
+// so any ratio of it is also 0 — would count its own dropout as speech.
+const SPEECH_MIN = 0.002;
 
 async function dictStart() {
   try {
@@ -471,7 +486,8 @@ async function dictStart() {
   dictNode = new AudioWorkletNode(dictCtx, 'cap');
   src.connect(dictNode);
   dictChunks = [];
-  dictLevels = [];
+  dictAmps = [];
+  noiseFloor = 0;
   dictNode.port.onmessage = e => {
     dictChunks.push(e.data);
     // A few levels per chunk, so the waveform moves at speech speed rather
@@ -480,7 +496,20 @@ async function dictStart() {
     for (let k = 0; k < LEVEL_SLICES; k++) {
       let sum = 0;
       for (let i = k * per; i < (k + 1) * per; i++) sum += f[i] * f[i];
-      dictLevels.push(Math.sqrt(sum / per));
+      const lvl = Math.sqrt(sum / per);
+      // Seed from the very first slice instead of creeping up from zero,
+      // which would take hundreds of slices and call the opening silence
+      // speech the whole way.
+      if (noiseFloor === 0) noiseFloor = lvl;
+      // Classify against the floor as it stood BEFORE this slice, so a loud
+      // one cannot raise the bar it is being measured against.
+      const thr = Math.max(noiseFloor * SPEECH_RATIO, SPEECH_MIN);
+      // Store what to draw, not the raw level: the floor moves, and a dot
+      // must not turn into a bar after it has scrolled into view.
+      const speech = lvl > thr;
+      dictAmps.push(speech ? Math.min(1, Math.sqrt(lvl - thr) * 3.4) : 0);
+      noiseFloor += (lvl - noiseFloor) *
+                    (lvl < noiseFloor ? NF_FALL : speech ? NF_RISE : NF_TRACK);
     }
   };
 
@@ -499,7 +528,7 @@ function dictRelease() {
 }
 
 function dictReset() {
-  dictChunks = []; dictLevels = [];
+  dictChunks = []; dictAmps = [];
   document.body.classList.remove('dictating');
   $('#accept').classList.remove('working');
   sync();
@@ -563,18 +592,15 @@ function drawWave() {
 
   for (let i = 0; i < cols; i++) {
     // Newest on the right: walk the tail of the level history.
-    const idx = dictLevels.length - cols + i;
-    const lvl = idx >= 0 ? dictLevels[idx] : 0;
-    // Below the floor is room tone, not speech, and it draws as a bare dot —
-    // a round cap on a zero-length stroke. Without the floor every breath of
-    // noise became a short dash and the quiet stretches read as low speech
-    // rather than as silence. Subtracting it before scaling keeps the first
-    // audible syllable from jumping off a pedestal.
-    const speaking = lvl > SILENCE_FLOOR;
-    const amp = speaking ? Math.min(1, Math.sqrt(lvl - SILENCE_FLOOR) * 3.4) : 0;
+    const idx = dictAmps.length - cols + i;
+    // Zero is room tone, and draws as a bare dot: a round cap on a
+    // zero-length stroke. It has to be legible on its own next to a
+    // full-height bar, so it is only a little dimmer, not a faint speck.
+    const amp = idx >= 0 ? dictAmps[idx] : 0;
+    const speaking = amp > 0;
     const len = amp * (mid - R);
     wctx.strokeStyle = speaking ? fg : dim;
-    wctx.globalAlpha = speaking ? 0.35 + amp * 0.65 : 0.28;
+    wctx.globalAlpha = speaking ? 0.35 + amp * 0.65 : 0.75;
     wctx.lineWidth = R * 2;
     wctx.lineCap = 'round';
     wctx.beginPath();
