@@ -250,6 +250,12 @@ body.voice #mic   { display: none; }
 /* Wider than it is tall: the ribbon runs horizontally, so a square box
    would be mostly empty above and below it. */
 #viz { width: min(82vw, 460px); height: min(34vw, 190px); }
+/* Nothing to show until the microphone is granted and the socket is up: a
+   ribbon breathing away over a permission prompt claims to be listening
+   when it cannot hear anything yet. Hidden rather than removed, so it fades
+   up in place instead of shoving the composer down when it arrives. */
+#viz { visibility: hidden; opacity: 0; transition: opacity .25s; }
+body.listening #viz { visibility: visible; opacity: 1; }
 /* Failures only. The ribbon already says listening / speaking / muted
    better than a caption can, but a denied microphone or a dropped socket
    has to be visible or it just sits there looking fine. */
@@ -782,6 +788,9 @@ function enqueue(f32) {
 async function openVoice() {
   if (dictOn) dictCancel();   // one microphone at a time
   document.body.classList.add('voice');
+  // Earned back below, once there is a microphone and a socket.
+  document.body.classList.remove('listening');
+  ampIn = ampOut = 0;
   // Talking is the primary act here; the box is the alternative, so it says
   // what it is for rather than repeating the general invitation.
   $('#box').placeholder = 'Type';
@@ -953,10 +962,16 @@ async function showSpokenTurn() {
 function connectWs() {
   const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
   ws = new WebSocket(proto + location.host + '/v1/realtime');
-  ws.onopen  = () => { $('#vstate').textContent = ''; };   // clears a previous failure
+  ws.onopen  = () => {
+    $('#vstate').textContent = '';                        // clears a previous failure
+    // Both halves are in place now: the microphone was granted before this
+    // was ever called, and the socket the chunks go to is open.
+    if (voiceOn) document.body.classList.add('listening');
+  };
   ws.onerror = () => { $('#vstate').textContent = 'connection failed'; };
   ws.onclose = () => {
     wsResponding = false; stopAudio(); refreshBusy();
+    document.body.classList.remove('listening');
     if (voiceOn) $('#vstate').textContent = 'disconnected';
   };
   ws.onmessage = ev => {
@@ -1006,6 +1021,7 @@ function connectWs() {
 
 function closeVoice() {
   voiceOn = false;
+  document.body.classList.remove('listening');
   turnAudio = [];
   endVoiceReply(true);
   if (ws) ws.close();
@@ -1104,7 +1120,9 @@ function ribbon(colour, amp, w, h, seed) {
 
 function draw() {
   requestAnimationFrame(draw);
-  if (!document.body.classList.contains('voice')) return;
+  // Not merely invisible — not running. The envelope followers would
+  // otherwise track a dead analyser and the ribbon would arrive mid-swell.
+  if (!document.body.classList.contains('listening')) return;
 
   const dpr = devicePixelRatio || 1;
   const w = cv.clientWidth, h = cv.clientHeight;
