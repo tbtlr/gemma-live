@@ -566,7 +566,7 @@ std::unique_ptr<VoiceSession> VoiceSession::create(const SessionConfig & cfg,
 
     // ---- VibeVoice TTS ----
     vibevoice_context_params vparams = vibevoice_context_default_params();
-    vparams.use_gpu              = true;
+    vparams.use_gpu              = cfg.tts_gpu;
     vparams.flash_attn           = true;   // σ-VAE encoder + Qwen2.5 attention on Metal
     vparams.verbosity            = (cfg.verbosity >= 2) ? cfg.verbosity : 0;
     vparams.cfg_scale            = (cfg.tts_cfg        > 0.0f) ? cfg.tts_cfg        : 1.5f;

@@ -1062,6 +1062,7 @@ int main(int argc, char ** argv) {
     cfg.temperature    = O.llm_temp;
     cfg.tts_cfg        = O.tts_cfg;
     cfg.tts_steps      = O.tts_steps;
+    cfg.tts_gpu        = !O.tts_cpu;
     cfg.tts_neg_anchor = O.tts_anchor;
     cfg.tts_first_chunk_frames = O.tts_chunk;
     cfg.tts_target_rms = O.tts_rms;

@@ -143,6 +143,11 @@ struct SessionConfig {
      * Raise it if the GPU is contended; 0 = VibeVoice's built-in 6. */
     int   tts_first_chunk_frames = 3;
     float tts_neg_anchor   = 0.2f;
+    /* Run VibeVoice on the GPU. Default true (Metal is much faster there).
+     * On CUDA the per-frame graph is rebuilt as n_past grows, and that
+     * reallocation churn makes cost grow with context - measured ~8-10x SLOWER
+     * than the CPU backend on Jetson/Tegra. Set false to opt out. */
+    bool  tts_gpu           = true;
     bool  tts_loudness_norm = true;
     /* Perceived-loudness target for the TTS normaliser. */
     float tts_target_rms   = 0.06f;

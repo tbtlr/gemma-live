@@ -42,6 +42,7 @@ struct gl_opts {
     float       tts_anchor  = 0.2f;
     int         tts_chunk   = 3;          // latent frames before first audio
     float       tts_rms     = 0.06f;
+    bool        tts_cpu     = false;      // opt out of GPU TTS (CUDA path is slow)
     std::string dfn_model   = "";         // empty = post-filter off
 
     // aec
@@ -132,6 +133,7 @@ inline std::vector<gl_opt_def> gl_option_table(gl_opts & o) {
       {"--tts-steps",   'i', &o.tts_steps,   "N",    "diffusion steps (barely affects latency)"},
       {"--tts-anchor",  'f', &o.tts_anchor,  "X",    "negative-condition anchor blend"},
       {"--tts-chunk",   'i', &o.tts_chunk,   "N",    "latent frames in the first chunk; drives ttfa"},
+      {"--tts-cpu",     'b', &o.tts_cpu,     nullptr,"run TTS on CPU (much faster than CUDA on Tegra)"},
       {"--tts-rms",     'f', &o.tts_rms,     "X",    "loudness target"},
       {"--dfn-model",   's', &o.dfn_model,   "PATH", "DeepFilterNet3 post-filter (off if unset)"},
 
