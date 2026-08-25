@@ -151,13 +151,16 @@ body.blank #thread { padding-top: 0; }
 footer { flex: none; padding: 10px 16px calc(22px + env(safe-area-inset-bottom)); }
 #composer {
   max-width: 46rem; margin: 0 auto; display: flex; flex-direction: column;
-  border: 1px solid var(--input); border-radius: var(--radius-box); padding: 7px 7px 7px 16px;
+  border: 1px solid var(--input); border-radius: var(--radius-box); padding: 7px;
   background: var(--card); transition: border-color .15s;
 }
 /* The old composer row, now one child of it, so attachments can stack above
    the text without the thumbnails competing with the buttons for the
    right-hand edge. */
 #row { display: flex; align-items: flex-end; gap: 6px; }
+/* The attach button provides the text's left inset. Where it is not there,
+   the padding has to, or the words start hard against the border. */
+body.voice #composer, body.novision #composer { padding-left: 16px; }
 #composer:focus-within { border-color: var(--ring); }
 #box {
   flex: 1; border: 0; outline: 0; resize: none; background: none; color: inherit;
@@ -166,7 +169,7 @@ footer { flex: none; padding: 10px 16px calc(22px + env(safe-area-inset-bottom))
 #box::placeholder { color: var(--muted-foreground); }
 .icon {
   width: 36px; height: 36px; border-radius: 50%; flex: none;
-  display: grid; place-items: center;
+  display: flex; align-items: center; justify-content: center;
   transition: opacity .15s, background-color .15s;
 }
 .icon:hover { background-color: var(--accent); }
@@ -197,6 +200,11 @@ body.gsym .gs  { display: block; }
    dimming to 0.35 left it invisible against a dark ground, which reads as
    a missing button rather than an inactive one. */
 .icon:disabled { cursor: default; }
+/* The filled buttons say it with their fill (below). A plain glyph has
+   nothing to change, so it dims — and must stop lighting up on hover, which
+   otherwise makes a dead button look live. */
+.icon:not(.filled):disabled { opacity: .4; }
+.icon:disabled:hover { background-color: transparent; }
 .icon.filled:disabled {
   background-color: var(--muted); color: var(--muted-foreground); opacity: 1;
 }
@@ -225,7 +233,7 @@ body.dictating #send,
 body.dictating .round  { display: none; }
 #cancel, #accept       { display: none; }
 body.dictating #cancel,
-body.dictating #accept { display: grid; }
+body.dictating #accept { display: flex; }
 #accept.working { opacity: .55; }
 #composer:not(.typing) #send  { display: none; }
 /* While a reply is being produced, the button that starts one becomes the
@@ -239,39 +247,64 @@ body.dictating #accept { display: grid; }
    shows the button rather than in overrides after it, so there is only one
    rule to weigh. */
 #stop { display: none; }
-body.responding:not(.voice):not(.dictating) #composer #stop { display: grid; }
+body.responding:not(.voice):not(.dictating) #composer #stop { display: flex; }
 body.responding:not(.voice):not(.dictating) #composer #send,
 body.responding:not(.voice):not(.dictating) #composer #mic,
 body.responding:not(.voice):not(.dictating) #composer #dict { display: none; }
+/* Attach is not in that list: it holds the left edge, so hiding it would
+   shunt the whole box sideways every time a reply starts. It greys out
+   instead, from the same disabled state dictation uses. */
 /* Same rule in voice mode: once there is something to send, sending is the
    only thing the box should offer. Mute and end come back when it empties. */
 #composer.typing .round       { display: none; }
 
 /* Pending images stack inside the box, above the text — they are part of
    the message being written, so the box grows to hold them rather than
-   something separate floating over it. Aligned with the text rather than
-   the border, which is what the composer's left padding already gives. */
-#tray { display: none; gap: 8px; flex-wrap: wrap; padding: 4px 0 8px; }
+   something separate floating over it. They sit against the box's own inset
+   rather than lining up with the text, which now starts past the attach
+   button. */
+/* Nothing on top, so the thumbnails sit the same 8px off the composer's
+   border as the button row does off the bottom. */
+#tray { display: none; gap: 8px; flex-wrap: wrap; padding: 0 0 8px; }
 #tray:not(:empty) { display: flex; }
 body.dictating #tray, body.voice #tray { display: none; }
-.thumb { position: relative; width: 112px; height: 112px; border-radius: var(--radius-inner);
-         overflow: hidden; border: 1px solid var(--border); flex: none; }
-.thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* The frame carries no border and no overflow:hidden, so that top:0/right:0
+   on the close button is the OUTER corner rather than a pixel inside it —
+   absolute offsets come off the padding box, so a border on the frame would
+   push the button in by its width. Both the border and the rounding live on
+   the image, which is also what stops the corner clipping a bite out of a
+   button that deliberately sits on it. */
+.thumb { position: relative; width: 112px; height: 112px; flex: none; }
+.thumb img { width: 100%; height: 100%; object-fit: cover; display: block;
+             border-radius: var(--radius-inner); }
 /* Hover only, so a tray of attachments reads as pictures and not as a row of
    controls. Plain :focus, not :focus-visible — whether the latter fires is a
    browser heuristic about how focus arrived, and the failure mode is a
    button you have tabbed to and cannot see. */
 .thumb button {
-  position: absolute; top: 5px; right: 5px; width: 20px; height: 20px;
+  /* Measured off ChatGPT's, normalised to the picture's width: the chip's
+     centre sits 7.0% of the width in from the right edge and 2.1% DOWN from
+     the top. It is not symmetric — it overhangs the top and is all but flush
+     on the right, which is why neither straddling both axes nor insetting
+     both ever matched. On a 112px thumbnail with a 14px chip that is
+     top -5, right 1. */
+  position: absolute; top: -5px; right: 1px; width: 14px; height: 14px;
   border: 0; border-radius: 50%; cursor: pointer; padding: 0;
-  background: rgba(0,0,0,.65); color: #fff;
-  /* Grid-centred, not line-height-centred: U+00D7 sits on the maths axis,
-     which is above the middle of its line box, so a matching line-height
-     leaves it visibly high. place-items centres the glyph's own box. */
-  display: grid; place-items: center;
-  font: 13px/1 sans-serif;
+  /* Fixed light chip, not --primary: this sits on top of someone's
+     photograph, not on a themed surface, so it must not invert with the
+     theme and leave a dark blob on a dark picture. The hairline ring is what
+     keeps it visible when the photo underneath is white. */
+  background: rgba(255,255,255,.94); color: #1f1f1f;
+  box-shadow: 0 0 0 1px rgba(0,0,0,.22);
+  /* Flex-centred like the rest, and drawing the icon font's `close` rather
+     than a text "x". Centring the box was never the problem: U+00D7 sits on
+     the maths axis, above the middle of its own line box, so the glyph rides
+     high however the box is aligned. The icon font's glyph is drawn centred
+     on its em square, which is the only way this comes out right. */
+  display: flex; align-items: center; justify-content: center;
   opacity: 0; transition: opacity .12s;
 }
+.thumb button .gs { font-size: 10px; }
 .thumb:hover button, .thumb button:focus { opacity: 1; }
 /* Where there is no hover there is no reveal, and an attachment you cannot
    remove is worse than one that looks slightly busy. */
@@ -294,18 +327,19 @@ body.dictating #tray, body.voice #tray { display: none; }
    silently squares off the corner you were trying to shape.
  
    1.25rem is about half the height of a one-line bubble, so it still reads
-   as a pill, and 20 + 8 fits inside 42 with no scaling at all. */
+   as a pill, and 20 + 11.2 fits inside 42 with no scaling at all. */
 .msg .shots + .body {
-  border-radius: 1.25rem 0.5rem 1.25rem 1.25rem;
+  border-radius: 1.25rem 0.7rem 1.25rem 1.25rem;
 }
 .msg .body:empty { display: none; }
 /* Stays put while you type, unlike mic and voice: a caption for the image
    you just attached is the normal case, so this is not part of the
-   one-affordance-at-a-time slot on the right. */
-body.voice #attach, body.dictating #attach { display: none; }
+   one-affordance-at-a-time slot on the right. Dictation disables it instead
+   of hiding it — it anchors the left edge, and taking it away would shunt
+   the waveform sideways mid-recording. */
+body.voice #attach { display: none; }
 /* No vision tower on this server: the button would only lead to an error. */
 body.novision #attach { display: none; }
-body.responding:not(.voice):not(.dictating) #composer #attach { display: none; }
 
 /* ── voice overlay ────────────────────────────────────────────────── */
 /* Voice mode occupies the conversation area, not the whole window: the
@@ -353,7 +387,7 @@ body.listening #viz { visibility: visible; opacity: 1; }
    box — and only takes a fill once it is actually muting something. End
    keeps its solid treatment because it is the destructive-ish action. */
 .round { display: none; }
-body.voice #composer:not(.typing) .round { display: grid; }
+body.voice #composer:not(.typing) .round { display: flex; }
 .round:hover { background-color: var(--accent); opacity: 1; }
 .round.off { background-color: var(--destructive); color: oklch(0.985 0 0); }
 .round.off:hover { background-color: var(--destructive); opacity: .85; }
@@ -393,6 +427,9 @@ body.voice #composer:not(.typing) .round { display: grid; }
   <form id="composer">
     <div id="tray"></div>
     <div id="row">
+    <button type="button" class="icon" id="attach" title="Add image" aria-label="Add image">
+      <span class="gs">add_photo_alternate</span>
+    </button>
     <textarea id="box" rows="1" placeholder="Ask anything" autocomplete="off"></textarea>
     <canvas id="wave" aria-hidden="true"></canvas>
     <button type="button" class="icon" id="cancel" title="Discard" aria-label="Discard">
@@ -400,9 +437,6 @@ body.voice #composer:not(.typing) .round { display: grid; }
     </button>
     <button type="button" class="icon filled" id="accept" title="Use it" aria-label="Use it">
       <span class="gs">check</span>
-    </button>
-    <button type="button" class="icon" id="attach" title="Add image" aria-label="Add image">
-      <span class="gs">add_photo_alternate</span>
     </button>
     <button type="button" class="icon" id="dict" title="Dictate" aria-label="Dictate">
       <span class="gs">mic</span>
@@ -562,7 +596,10 @@ function drawTray() {
     d.className = 'thumb';
     const im = document.createElement('img'); im.src = url; im.alt = '';
     const x = document.createElement('button');
-    x.type = 'button'; x.textContent = '\u00d7';
+    x.type = 'button';
+    // Same icon font as every other button in the page.
+    const g = document.createElement('span'); g.className = 'gs'; g.textContent = 'close';
+    x.appendChild(g);
     x.title = 'Remove'; x.setAttribute('aria-label', 'Remove image');
     x.onclick = () => { pending.splice(i, 1); drawTray(); sync(); };
     d.append(im, x);
@@ -770,6 +807,7 @@ async function dictStart() {
 
   dictOn = true;
   document.body.classList.add('dictating');
+  sync();
   drawWave();
 }
 
@@ -913,6 +951,9 @@ function refreshBusy() {
   // offering it would only queue behind the answer being written.
   $('#mic').disabled = busy;
   $('#dict').disabled = busy;
+  // Dictation owns the composer while it runs; attaching mid-recording would
+  // land in a box the user cannot see.
+  $('#attach').disabled = busy || dictOn;
 }
 function sync() {
   box.style.height = 'auto';
