@@ -1037,6 +1037,10 @@ int main(int argc, char ** argv) {
     signal(SIGPIPE, SIG_IGN);
 
     gl_opts O;
+    // The desktop app is voice-only and its prompt says so on every line.
+    // Here the same session answers typed turns as well, so it needs a
+    // prompt that tells the two apart. --sys-prompt still overrides.
+    O.sys_prompt = "prompts/web.txt";
     const std::vector<std::string> groups = {"llm", "sys", "mtp", "tts", "dfn", "vad", "stt", "rt"};
     {
         std::string err;
