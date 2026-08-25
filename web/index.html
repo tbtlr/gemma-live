@@ -973,6 +973,13 @@ function draw() {
   ribbon(css('--listen'), Math.max(IDLE, ampIn),  w, h, 1.7);
 }
 
+// Swap in the Google Symbols glyphs only once the font has really loaded.
+if (document.fonts && document.fonts.load) {
+  document.fonts.load('20px "Google Symbols"').then(() => {
+    if (document.fonts.check('20px "Google Symbols"')) document.body.classList.add('gsym');
+  }).catch(() => {});
+}
+
 // Greeting by local time. Three bands, not four: "good night" is a
 // farewell in English, so using it to greet someone who just arrived reads
 // as being shown the door. Late hours get "evening" instead.
