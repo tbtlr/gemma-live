@@ -795,9 +795,16 @@ function connectWs() {
   ws.onmessage = ev => {
     const m = JSON.parse(ev.data);
     switch (m.type) {
+      // Deliberately NOT sharing a body with speech_stopped. These two once
+      // both did nothing and were folded together; when the turn handling
+      // was added to what looked like the stopped case, started inherited
+      // it — and since started fires about 800ms into an utterance, it took
+      // the opening words away into their own bubble and left the rest to
+      // arrive without them.
       case 'input_audio_buffer.speech_started':
+        break;                             // the ribbon already shows this
       case 'input_audio_buffer.speech_stopped':
-        turnMark('start');                 // the server starts the turn here
+        turnMark('start');                 // the user is waiting from here
         showSpokenTurn();
         break;
       case 'response.created':

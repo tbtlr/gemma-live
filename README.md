@@ -302,10 +302,12 @@ speaking) rather than invented ones.
 Type is **Google Sans Flex** and icons are **Google Symbols**, the two
 families `ai.google.dev/gemma` itself loads, from Google's CDN. Neither is
 open source — see `fonts.google.com/license/googlerestricted` — so they are
-linked, never vendored, and the page falls back to the system sans and to
-inline SVG icons when they do not load, which matters for a tool meant to
-work offline. Google Symbols is subsetted to the four glyphs used here: the
-whole font is 2.5 MB, these are 4 KB.
+linked, never vendored. Text falls back to the system sans when the face
+does not arrive; icons cannot fall back, since an unloaded ligature renders
+as the literal word "mic_off", so the glyphs stay hidden until a font-load
+check passes and the buttons are briefly unlabelled instead. Google Symbols
+is subsetted to the glyphs used here: the whole font is 2.5 MB, these are
+4 KB.
 
 It is one file (`web/index.html`), served from disk so editing it and
 reloading needs no rebuild; `--rt-ui` points elsewhere.
