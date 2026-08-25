@@ -449,8 +449,14 @@ seconds). Transcription is off the critical path — the benchmark below puts
 it 11 ms from the audio path at end-of-turn — so its cost buys languages
 rather than latency.
 
-English-only and short of memory? `--stt-model models/moonshine-base-q4_k.gguf`
-is a tenth the size and three times faster.
+English-only and short of memory? moonshine-base is a tenth the size and
+three times faster, and is not fetched by default:
+
+```bash
+curl -L -o models/moonshine-base-q4_k.gguf \
+  https://huggingface.co/cstr/moonshine-base-GGUF/resolve/main/moonshine-base-q4_k.gguf
+./build/gl-serve --stt-model models/moonshine-base-q4_k.gguf
+```
 
 Kyutai is wired up but did poorly here, and the test was not fair to it: it
 is a streaming model driven single-shot, and `stt-1b` is the en/fr variant
