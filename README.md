@@ -263,12 +263,11 @@ either — a half-transcribed sentence rewriting itself as you speak is
 noise, and the waveform already says the microphone is live. One pass over
 the whole take on keep.
 
-**Press the wave** for voice mode: a large animated version of that same
-icon takes over the conversation area — graphic_eq's row of bars, so the
-button expands into the thing you pressed. Both directions are drawn on the
-same bars, blue for what the microphone hears and amber for what Gemma is
-saying, amber wide behind and blue narrower in front. They are rarely both
-live, so usually one colour shows; talking over her shows both. The composer stays live below and
+**Press the wave** for voice mode: a ribbon takes over the conversation
+area — overlapping travelling waves whose amplitude follows the audio,
+tapered to nothing at the ends. Blue is the microphone, amber is Gemma, both
+drawn every frame and translucent, so where they coincide the colours mix
+rather than one hiding the other. The composer stays live below and
 gains mute and end buttons inside it — so a thought that is easier typed
 than spoken does not mean leaving voice mode first. Speaking over Gemma cuts
 her off.

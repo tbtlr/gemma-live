@@ -870,69 +870,76 @@ $('#hang').onclick = closeVoice;
 $('#mute').onclick = () => { muted = !muted; $('#mute').classList.toggle('off', muted); };
 addEventListener('keydown', e => { if (e.key === 'Escape' && voiceOn) closeVoice(); });
 
-// ── the bars ──────────────────────────────────────────────────────────
+// ── the voice ribbon ──────────────────────────────────────────────────
 //
-// A large animated graphic_eq — the same glyph the composer's voice button
-// uses, so pressing it expands into the thing you pressed.
+// Bars were the obvious visual and the wrong one: discrete, quantised, and
+// they snap. Speech does not. This draws each side as a few overlapping
+// travelling waves instead — continuous curves whose amplitude follows the
+// audio, tapered to nothing at the edges so the shape is a lens rather than
+// a band with cut ends.
 //
-// Both directions are drawn every frame on the same bars: blue for what the
-// microphone hears, amber for what Gemma is saying. They are rarely both
-// live, so most of the time one colour shows; when you talk over her both
-// do, which is the moment worth seeing.
+// Blue is the microphone, amber is Gemma, both drawn every frame and
+// translucent, so where they coincide the colours actually mix instead of
+// one hiding the other. Layers within a side run at slightly different
+// speeds and wavelengths; that slow drift in and out of phase is what stops
+// it looking like a rendered sine and starts it looking alive.
 const cv = $('#orb'), g = cv.getContext('2d');
 let phase = 0;
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 
-const BARS = 5;                    // graphic_eq's count
-const BAND = [1, 3, 7, 14, 26];    // FFT bin each bar reads, low to high
+// Per-side smoothed energy. Rising fast and falling slow is what reads as a
+// voice; chasing the raw FFT reads as noise.
+let ampIn = 0, ampOut = 0;
 
-// Per-bar smoothing: the raw FFT jitters frame to frame, and bars that chase
-// it read as noise. Rising fast and falling slow is what looks like a voice.
-const lvlIn  = new Array(BARS).fill(0);
-const lvlOut = new Array(BARS).fill(0);
-
-function bandLevels(an, into) {
-  if (!an) { for (let i = 0; i < BARS; i++) into[i] *= 0.82; return false; }
+function energy(an) {
+  if (!an) return 0;
   const d = new Uint8Array(an.frequencyBinCount);
   an.getByteFrequencyData(d);
-  let any = false;
-  for (let i = 0; i < BARS; i++) {
-    const c = BAND[i];
-    let sum = 0, n = 0;
-    for (let k = Math.max(0, c - 1); k <= Math.min(d.length - 1, c + 2); k++) { sum += d[k]; n++; }
-    const v = (sum / n) / 255;
-    if (v > 0.03) any = true;
-    into[i] = v > into[i] ? v : into[i] * 0.80 + v * 0.20;
-  }
-  return any;
+  let sum = 0;
+  const n = Math.min(48, d.length);            // voice lives low in the band
+  for (let i = 1; i < n; i++) sum += d[i];
+  return (sum / (n - 1)) / 255;
 }
 
-// `frac` is the bar width as a fraction of the pitch. The two directions
-// share the bars but not the width: amber wide behind, blue narrower in
-// front, so an interruption shows as blue inside amber rather than one
-// colour simply replacing the other.
-function drawSide(levels, colour, w, h, live, frac) {
-  const pitch = w / BARS;
-  const bw    = pitch * frac;
-  const mid   = h / 2;
-  const maxH  = h * 0.44;
-  const minH  = bw * 0.5;            // a dot when silent, like the icon's short ends
-  const x0    = (cv.clientWidth - w) / 2 + pitch / 2;
-  g.strokeStyle = colour;
-  g.lineCap = 'round';
-  g.lineWidth = bw;
-  for (let i = 0; i < BARS; i++) {
-    const amp  = live ? levels[i] : 0;
-    // Idle keeps a slow breath rather than a flat line, so a quiet session
-    // does not look frozen.
-    const idle = 0.05 + 0.035 * Math.sin(phase * 1.6 + i * 0.9);
-    const len  = Math.max(minH, (live ? amp : idle) * maxH);
-    const x    = x0 + i * pitch;
-    g.globalAlpha = live ? 0.6 + amp * 0.4 : 0.28;
+// Three layers, each a travelling wave at its own wavelength and speed.
+const LAYERS = [
+  { k: 1.6, v: 0.55, a: 1.00, alpha: 0.30 },
+  { k: 2.7, v: -0.38, a: 0.62, alpha: 0.26 },
+  { k: 4.3, v: 0.83, a: 0.38, alpha: 0.20 },
+];
+
+function ribbon(colour, amp, w, h, seed) {
+  const mid = h / 2;
+  const max = h * 0.42;
+  for (const L of LAYERS) {
     g.beginPath();
-    g.moveTo(x, mid - len);
-    g.lineTo(x, mid + len);
-    g.stroke();
+    const steps = 96;
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps;
+      const x = t * w;
+      // Taper to nothing at both ends, so the ribbon has no cut edges.
+      const env = Math.sin(Math.PI * t);
+      // A slow secondary swell along the length keeps the envelope from
+      // being a perfect lens every frame.
+      const swell = 0.75 + 0.25 * Math.sin(phase * 0.6 + t * 2.1 + seed);
+      const y = mid + Math.sin(t * Math.PI * 2 * L.k + phase * L.v * 3 + seed)
+                      * env * swell * max * L.a * amp;
+      i ? g.lineTo(x, y) : g.moveTo(x, y);
+    }
+    // Mirror back along the centre to close the shape into a lens.
+    for (let i = steps; i >= 0; i--) {
+      const t = i / steps;
+      const x = t * w;
+      const env = Math.sin(Math.PI * t);
+      const swell = 0.75 + 0.25 * Math.sin(phase * 0.6 + t * 2.1 + seed);
+      const y = mid - Math.sin(t * Math.PI * 2 * L.k + phase * L.v * 3 + seed)
+                      * env * swell * max * L.a * amp;
+      g.lineTo(x, y);
+    }
+    g.closePath();
+    g.fillStyle = colour;
+    g.globalAlpha = L.alpha;
+    g.fill();
   }
   g.globalAlpha = 1;
 }
@@ -947,23 +954,17 @@ function draw() {
   if (cv.width !== w * dpr) { cv.width = w * dpr; cv.height = h * dpr; }
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
   g.clearRect(0, 0, w, h);
-  phase += 0.03;
+  phase += 0.02;
 
-  const outLive = bandLevels(speaking ? outAn : null, lvlOut);
-  const inLive  = bandLevels(muted ? null : inAn, lvlIn);
+  const eIn  = muted    ? 0 : energy(inAn);
+  const eOut = speaking ? energy(outAn) : 0;
+  ampIn  = eIn  > ampIn  ? eIn  : ampIn  * 0.88 + eIn  * 0.12;
+  ampOut = eOut > ampOut ? eOut : ampOut * 0.88 + eOut * 0.12;
 
-  // Amber first, blue over it: while Gemma speaks the microphone is mostly
-  // hearing her, so drawing input on top keeps a real interruption visible.
-  const span = cv.clientWidth * 0.80;
-  drawSide(lvlOut, css('--speak'),  span, h, outLive, 0.34);
-  drawSide(lvlIn,  css('--listen'), span, h, inLive,  0.17);
-}
-
-// Swap in the Google Symbols glyphs only once the font has really loaded.
-if (document.fonts && document.fonts.load) {
-  document.fonts.load('20px "Google Symbols"').then(() => {
-    if (document.fonts.check('20px "Google Symbols"')) document.body.classList.add('gsym');
-  }).catch(() => {});
+  // A resting swell so a quiet session breathes rather than going flat.
+  const IDLE = 0.06;
+  ribbon(css('--speak'),  Math.max(IDLE, ampOut), w, h, 0.0);
+  ribbon(css('--listen'), Math.max(IDLE, ampIn),  w, h, 1.7);
 }
 
 // Greeting by local time. Three bands, not four: "good night" is a
