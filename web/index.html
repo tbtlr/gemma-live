@@ -164,7 +164,13 @@ body.voice #composer, body.novision #composer { padding-left: 16px; }
 #composer:focus-within { border-color: var(--ring); }
 #box {
   flex: 1; border: 0; outline: 0; resize: none; background: none; color: inherit;
-  font: inherit; padding: 7px 0; max-height: 40vh; line-height: 1.5;
+  font: inherit; padding: 7px 0; max-height: 40vh;
+  /* 22 rather than 1.5 (= 22.5), so that 7 + 22 + 7 is exactly the 36px of
+     the buttons beside it. At 22.5 the textarea rounded up to 37, and since
+     the row bottom-aligns, that half pixel became a whole one of dead space
+     ABOVE the buttons and none below — which reads as the box being padded
+     more at the top than the bottom. */
+  line-height: 22px;
 }
 #box::placeholder { color: var(--muted-foreground); }
 .icon {
@@ -957,7 +963,11 @@ function refreshBusy() {
 }
 function sync() {
   box.style.height = 'auto';
-  box.style.height = Math.min(box.scrollHeight, window.innerHeight * 0.4) + 'px';
+  // Never below one line. window.innerHeight can be 0 while the page is
+  // laying out or in a detached view, and Math.min against that collapses
+  // the textarea to nothing — placeholder clipped, buttons adrift.
+  const cap = Math.max(window.innerHeight * 0.4, 36);
+  box.style.height = Math.max(36, Math.min(box.scrollHeight, cap)) + 'px';
   // "typing" is really "has something to send" — an attached image counts,
   // or the send button would stay hidden behind the voice one.
   $('#composer').classList.toggle('typing', !!box.value.trim() || pending.length > 0);
