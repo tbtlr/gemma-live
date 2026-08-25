@@ -1098,6 +1098,11 @@ int main(int argc, char ** argv) {
     // Here the same session answers typed turns as well, so it needs a
     // prompt that tells the two apart. --sys-prompt still overrides.
     O.sys_prompt = "prompts/chat.txt";
+    // Vision on by default here, unlike the CLI: this is the binary an image
+    // can actually reach, through /api/chat or the page's attach button.
+    // --llm-vision-off gives back the ~215 MiB of weights and the ~101 MiB
+    // Metal compute buffer for a text- and speech-only server.
+    O.llm_vision = true;
     const std::vector<std::string> groups = {"llm", "sys", "mtp", "tts", "vad", "stt", "rt"};
     {
         std::string err;

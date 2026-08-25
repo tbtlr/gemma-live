@@ -367,14 +367,16 @@ a sentence or two with nothing in them that cannot be read aloud.
 
 ### Images
 
-Off by default. The mmproj already carries a vision tower beside the audio
-one, but loading it costs ~215 MiB of weights, a ~101 MiB Metal compute
-buffer and a 768x768 warmup pass — which a microphone-only client can never
-use. Only `gl-serve` can turn it on, and `gemma-live` will not accept the
-flag at all:
+On by default in `gl-serve`, off by default in `gemma-live`. The mmproj
+already carries a vision tower beside the audio one, but loading it costs
+~215 MiB of weights, a ~101 MiB Metal compute buffer and a 768x768 warmup
+pass — worth paying where an image can arrive, wasted where one cannot. The
+CLI has no way to supply one, so it does not load it unless asked.
 
 ```bash
-./build/gl-serve --llm-vision
+./build/gl-serve                      # images work
+./build/gl-serve --llm-vision-off     # text and speech only, smaller
+./build/gemma-live --llm-vision      # loads it, though nothing feeds it yet
 ```
 
 Then `POST /api/chat` takes an `images` array beside the message: base64,

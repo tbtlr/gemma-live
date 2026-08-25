@@ -581,7 +581,7 @@ function notify(msg) {
 
 async function addFiles(files) {
   if (!canSeeImages) {
-    notify('this server was started without --llm-vision, so it cannot read images');
+    notify('this server has vision disabled, so it cannot read images');
     return;
   }
   for (const f of files) {

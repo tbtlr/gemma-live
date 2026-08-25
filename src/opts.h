@@ -25,8 +25,9 @@ struct gl_opts {
     int         llm_ctx     = 8192;
     int         llm_predict = 256;
     float       llm_temp    = 0.3f;
-    // Opt-in, and only gl-serve offers it — see the table entry for why it is
-    // grouped under the server rather than under llm.
+    // Default for gemma-live; gl-serve flips it on before parsing, the same
+    // way it swaps the system prompt. The CLI has no way to supply an image,
+    // so it should not load a tower it cannot reach.
     bool        llm_vision  = false;
 
     // sys
@@ -110,10 +111,6 @@ struct gl_opt_def {
     void       * p;
     const char * meta;      // argument placeholder, or nullptr for a flag
     const char * help;
-    // Which group owns this flag, when that is NOT the prefix in its name.
-    // Groups are what each binary whitelists, so this is how a flag named for
-    // the subsystem it configures can still be offered by only one binary.
-    const char * group = nullptr;
 };
 
 // Built against a live gl_opts so the table stores real addresses; call with a
@@ -126,6 +123,11 @@ inline std::vector<gl_opt_def> gl_option_table(gl_opts & o) {
       {"--llm-ctx",     'i', &o.llm_ctx,     "N",    "context window"},
       {"--llm-predict", 'i', &o.llm_predict, "N",    "max tokens per reply"},
       {"--llm-temp",    'f', &o.llm_temp,    "X",    "sampling temperature"},
+      // Two spellings because the default differs by binary: gl-serve wants
+      // it on, gemma-live has no way to feed an image and should not pay
+      // ~215 MiB of weights plus a ~101 MiB Metal buffer for it.
+      {"--llm-vision",  'b', &o.llm_vision,  nullptr,"load the mmproj's vision tower (images)"},
+      {"--llm-vision-off",'o',&o.llm_vision, nullptr,"leave the vision tower unloaded"},
 
       {"--sys-prompt",  's', &o.sys_prompt,  "PATH", "system prompt file"},
 
@@ -178,12 +180,6 @@ inline std::vector<gl_opt_def> gl_option_table(gl_opts & o) {
       {"--rt-host",     's', &o.rt_host,     "ADDR", "address to bind"},
       {"--rt-port",     'i', &o.rt_port,     "N",    "port to bind"},
       {"--rt-ui",       's', &o.rt_ui,       "PATH", "web ui page to serve at /"},
-      // Named for what it loads, grouped where it can be used: only gl-serve
-      // can receive an image, and the vision tower costs ~215 MiB of weights,
-      // a ~101 MiB Metal buffer and a 768x768 warmup to load, so the CLI must
-      // not even be able to ask for it. Sits here rather than with the other
-      // --llm- flags because the usage printer groups by adjacency.
-      {"--llm-vision",  'b', &o.llm_vision,  nullptr,"load the mmproj's vision tower (images)", "rt"},
 
       {"--fup-timeout", 'i', &o.fup_timeout, "MS",   "how long the follow-up window stays open"},
       {"--fup-hops",    'i', &o.fup_hops,    "N",    "100 ms hops of voice needed to continue"},
@@ -232,10 +228,7 @@ inline bool gl_group_enabled(const std::vector<std::string> & groups, const std:
     return std::find(groups.begin(), groups.end(), g) != groups.end();
 }
 
-// An explicit group wins over the one in the flag's name, so a flag can be
-// named for what it configures and still be offered by only one binary.
 inline std::string gl_group_of(const gl_opt_def & d) {
-    if (d.group) return d.group;
     const char * head = d.flag + 2;
     const char * dash = strchr(head, '-');
     return dash ? std::string(head, dash) : std::string("general");
