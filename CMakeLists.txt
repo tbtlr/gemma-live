@@ -170,7 +170,7 @@ target_include_directories(gl-session PUBLIC
     ${GL_LLAMA_DIR}/include
     ${GL_LLAMA_DIR}/tools/mtmd
     ${GL_CRISPASR_DIR}/include                            # crispasr.h
-    ${GL_CRISPASR_DIR}/src                                # vibevoice.h, dfn.h,
+    ${GL_CRISPASR_DIR}/src                                # vibevoice.h,
                                                           # firered_vad.h, moonshine,
                                                           # core/audio_resample.h
 )
@@ -185,12 +185,6 @@ target_link_libraries(gl-session PUBLIC
 )
 
 target_compile_features(gl-session PUBLIC cxx_std_17)
-
-# DFN post-filter is wired in src/session.cpp under #if defined(CRISPASR_DFN).
-# crispasr-tts is built with CRISPASR_DFN=1 (default ON in CrispASR), so the
-# symbols are present in libcrispasr-tts.dylib — we just need the matching
-# define here to compile against them.
-target_compile_definitions(gl-session PRIVATE CRISPASR_DFN=1)
 
 # rpath so the -crispasr-suffixed dylibs resolve at run time. Inherited by
 # anything linking gl-session.

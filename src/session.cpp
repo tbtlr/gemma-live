@@ -25,10 +25,6 @@
 
 #include "vibevoice.h"     // CrispASR streaming TTS
 
-#if defined(CRISPASR_DFN)
-#  include "dfn.h"                  // CrispASR DeepFilterNet3 post-filter
-#  include "core/audio_resample.h"  // CrispASR polyphase Kaiser resampler
-#endif
 
 #include <algorithm>
 #include <atomic>
@@ -270,16 +266,6 @@ struct VoiceSession::Impl {
     bool                       loudness_norm      = true;
     loudness_filter            loudness;
 
-    // DFN post-filter (optional). Loaded once at session create; per-turn
-    // dfn_stream is created in begin_turn and freed (after drain) in end_turn.
-    // When dfn_model_ptr is non-null the on_audio callback is invoked at
-    // 48 kHz (dfn native rate) instead of 24 kHz.
-#if defined(CRISPASR_DFN)
-    dfn_model                * dfn_model_ptr  = nullptr;
-    dfn_stream               * dfn_stream_ptr = nullptr;
-    std::vector<float>         dfn_in_48k;    // upsampled chunk (input to DFN)
-    std::vector<float>         dfn_out_48k;   // DFN output (forwarded to consumer)
-#endif
     int                        tts_output_rate = GL_TTS_RATE;
 
     // Conversation cursor
@@ -334,12 +320,7 @@ struct VoiceSession::Impl {
 // Apply loudness normalisation (in-place on the session scratch buffer to
 // avoid a per-chunk allocation), accumulate the per-turn sample count for
 // stats, then forward to the owner's on_audio.
-//
-// When DFN is active the chunk also takes a detour: upsampled 24 → 48 kHz
-// (polyphase Kaiser), pushed through the streaming DFN, and the consumer
-// callback fires at 48 kHz with the denoised output. `tts_samples` keeps
-// counting the 24 kHz native count — stats and timing stay in the native
-// rate domain (one canonical clock for the turn).
+
 std::vector<float> VoiceSession::synthesize(const std::string & text, std::string * err) {
     std::vector<float> out;
     if (!impl || !impl->tts_ctx) {
@@ -353,12 +334,9 @@ std::vector<float> VoiceSession::synthesize(const std::string & text, std::strin
         if (err) *err = "vibevoice_synthesize produced nothing for \"" + text + "\"";
         return out;
     }
-    const int rate = tts_sample_rate();
-    if (rate == GL_TTS_RATE) {
-        out.assign(pcm, pcm + n);
-    } else {
-        out = core_audio::resample_polyphase(pcm, n, GL_TTS_RATE, rate);
-    }
+    // vibevoice synthesises at GL_TTS_RATE and that is now the only output
+    // rate — the resample here existed for the DFN post-filter's 48 kHz.
+    out.assign(pcm, pcm + n);
     free(pcm);
     return out;
 }
@@ -383,26 +361,6 @@ void VoiceSession::Impl::tts_audio_bridge(const float * pcm, int n_samples, void
         src = s->tts_scratch_pcm.data();
     }
 
-#if defined(CRISPASR_DFN)
-    if (s->dfn_stream_ptr) {
-        // 24 → 48 kHz upsample.
-        std::vector<float> up = core_audio::resample_polyphase(src, src_n,
-                                                               GL_TTS_RATE,  /* 24000 */
-                                                               s->tts_output_rate /* 48000 */);
-        // DFN process — emits up to ~same count post lookahead. Size out
-        // buffer generously; DFN never writes more samples than it received.
-        if (s->dfn_out_48k.size() < up.size()) s->dfn_out_48k.resize(up.size());
-        int produced = 0;
-        dfn_stream_process(s->dfn_stream_ptr,
-                           up.data(), (int) up.size(),
-                           s->dfn_out_48k.data(), (int) s->dfn_out_48k.size(),
-                           &produced, /*final_chunk=*/ false);
-        if (produced > 0 && s->self->on_audio) {
-            s->self->on_audio(s->dfn_out_48k.data(), (size_t) produced);
-        }
-        return;
-    }
-#endif
 
     if (s->self->on_audio) s->self->on_audio(src, (size_t) src_n);
 }
@@ -603,30 +561,6 @@ std::unique_ptr<VoiceSession> VoiceSession::create(const SessionConfig & cfg,
                                                    /*parse_special=*/ true).size();
     }
 
-    // ---- DFN post-filter (optional) ----
-    // Load the DFN model once per session if a path was supplied. The
-    // per-turn dfn_stream is allocated in begin_turn and freed in end_turn —
-    // the model is shared and thread-safe per dfn.h. On any failure we
-    // disable DFN and keep the rate at GL_TTS_RATE.
-#if defined(CRISPASR_DFN)
-    if (!cfg.dfn_model_path.empty()) {
-        dfn_params dp = dfn_default_params();
-        dp.verbosity = (cfg.verbosity >= 2) ? cfg.verbosity : 0;
-        s->dfn_model_ptr = dfn_model_load(cfg.dfn_model_path.c_str(), dp);
-        if (s->dfn_model_ptr) {
-            s->tts_output_rate = dfn_model_sample_rate(s->dfn_model_ptr);
-            if (cfg.verbosity >= 1) {
-                fprintf(stderr, "dfn      %s @ %d Hz\n",
-                        cfg.dfn_model_path.c_str(), s->tts_output_rate);
-            }
-        } else {
-            fprintf(stderr, "dfn      DISABLED — %s failed to load\n",
-                    cfg.dfn_model_path.c_str());
-            s->tts_output_rate = GL_TTS_RATE;
-        }
-    }
-#endif
-
     return session;
 }
 
@@ -648,10 +582,6 @@ VoiceSession::~VoiceSession() {
 
     if (s->tts_ctx) vibevoice_free(s->tts_ctx);
     if (s->smpl)    common_sampler_free(s->smpl);
-#if defined(CRISPASR_DFN)
-    if (s->dfn_stream_ptr) { dfn_stream_free(s->dfn_stream_ptr); s->dfn_stream_ptr = nullptr; }
-    if (s->dfn_model_ptr)  { dfn_model_free(s->dfn_model_ptr);   s->dfn_model_ptr  = nullptr; }
-#endif
     // llama_init's unique_ptr cleans up model + lctx.
 }
 
@@ -737,18 +667,6 @@ bool VoiceSession::begin_turn(VoiceSession::turn_kind kind) {
         }
     }
 
-#if defined(CRISPASR_DFN)
-    // Fresh DFN stream per utterance. Warm-up runs ~1 s of silence through
-    // the graph to converge the EMA / GRU state away from zero-init before
-    // real audio arrives — without it the first ~0.5 s of output has
-    // audible warm-up distortion.
-    if (s->dfn_model_ptr) {
-        s->dfn_stream_ptr = dfn_stream_create(s->dfn_model_ptr);
-        if (s->dfn_stream_ptr) {
-            dfn_stream_warmup(s->dfn_stream_ptr, /*n_frames=*/ 100);
-        }
-    }
-#endif
 
     s->in_turn = true;
     return true;
@@ -804,20 +722,6 @@ bool VoiceSession::end_turn(bool speak) {
         return std::chrono::duration<double, std::milli>(b - a).count();
     };
 
-    // Always-free DFN per-utterance stream on EVERY exit from this function
-    // (normal + every error return). DFN free is cheap; running into an
-    // already-null pointer is guarded inside. Mirrors mtmd_audio_stream's
-    // cleanup but happens at the very end instead of mid-function so the
-    // drain step still has a live stream to flush.
-    auto cleanup_dfn_stream = [&]() {
-#if defined(CRISPASR_DFN)
-        if (s->dfn_stream_ptr) {
-            dfn_stream_free(s->dfn_stream_ptr);
-            s->dfn_stream_ptr = nullptr;
-        }
-#endif
-    };
-
     // Undo everything begin_turn/push_audio wrote into the KV cache, putting
     // the conversation back exactly where it was before this turn started.
     //
@@ -847,7 +751,6 @@ bool VoiceSession::end_turn(bool speak) {
         if (decode_embeddings(s->lctx, tail, n_tail, s->n_past, /*seq=*/ 0)) {
             mtmd_audio_stream_free(s->mtmd_stream);
             s->mtmd_stream = nullptr;
-            cleanup_dfn_stream();
             rollback_turn();
             s->in_turn = false;
             s->error = "end_turn: audio tail decode failed";
@@ -865,7 +768,6 @@ bool VoiceSession::end_turn(bool speak) {
     // the model to answer an empty user turn.
     if ((s->turn_is_text ? s->n_text_tokens : s->n_audio_tokens) == 0) {
         rollback_turn();
-        cleanup_dfn_stream();
         s->in_turn = false;
         if (on_done) on_done();
         // Stats stay zero — nothing happened.
@@ -882,7 +784,6 @@ bool VoiceSession::end_turn(bool speak) {
                                                      /*parse_special=*/ true);
         if (decode_text_tokens(s->lctx, toks, s->n_past, /*seq=*/ 0, s->n_batch,
                                /*logits_last=*/ true)) {
-            cleanup_dfn_stream();
             rollback_turn();
             s->in_turn = false;
             s->error = "end_turn: suffix decode failed";
@@ -901,7 +802,6 @@ bool VoiceSession::end_turn(bool speak) {
         ? vibevoice_tts_stream_begin(s->tts_ctx, Impl::tts_audio_bridge, s)
         : nullptr;
     if (speak && !tts) {
-        cleanup_dfn_stream();
         rollback_turn();
         s->in_turn = false;
         s->error = "end_turn: vibevoice_tts_stream_begin failed";
@@ -1059,24 +959,6 @@ bool VoiceSession::end_turn(bool speak) {
     // window through on_audio, then returns).
     if (tts) vibevoice_tts_stream_free(tts);
     s->tts_session.store(nullptr);
-
-#if defined(CRISPASR_DFN)
-    // Drain DFN's lookahead tail. final_chunk=true tells the stream to
-    // flush the last ~20 ms of buffered audio. Then free the per-utterance
-    // stream — a fresh one is created in the next begin_turn.
-    if (s->dfn_stream_ptr) {
-        if (s->dfn_out_48k.size() < 4096) s->dfn_out_48k.resize(4096);
-        int produced = 0;
-        dfn_stream_process(s->dfn_stream_ptr,
-                           nullptr, 0,
-                           s->dfn_out_48k.data(), (int) s->dfn_out_48k.size(),
-                           &produced, /*final_chunk=*/ true);
-        if (produced > 0 && on_audio) {
-            on_audio(s->dfn_out_48k.data(), (size_t) produced);
-        }
-    }
-#endif
-    cleanup_dfn_stream();
 
     const auto t_tts_end = clk::now();
 

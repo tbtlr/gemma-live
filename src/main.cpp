@@ -1062,9 +1062,7 @@ static void capture_cb(ma_device * dev, void * /*output*/, const void * input,
 struct audio_ring {
     std::mutex         m;
     std::vector<float> buf;
-    // ~12 ms of ramp. Set from the real output rate at startup, because DFN
-    // moves playback to 48 kHz and a constant sized for 24 kHz would halve
-    // the ramp exactly when it is doing the most work.
+    // ~12 ms of ramp, sized from the real output rate at startup.
     size_t             fade_length = 12 * 24;
     std::atomic<int>   fade_remaining{-1};
     void reset_for_session() {
@@ -1209,7 +1207,7 @@ int main(int argc, char ** argv) {
     {
         std::string err;
         const std::vector<std::string> groups =
-            {"llm","sys","mtp","tts","dfn","aec","kwd","vad","nod","fup","brg"};
+            {"llm","sys","mtp","tts","aec","kwd","vad","nod","fup","brg"};
         if (!gl_parse_args(argc, argv, O, &err, groups)) {
             fprintf(stderr, "%s\n\n", err.c_str());
             gl_usage(stderr, argv[0], groups);
@@ -1283,11 +1281,6 @@ int main(int argc, char ** argv) {
     cfg.n_threads      = O.llm_threads;
     cfg.verbosity      = O.verbosity;
 
-    // DFN post-filter for TTS is disabled by default — we're going to
-    // handle vibevoice's music-artifact openers via prompt engineering
-    // instead of scrubbing them after the fact. Set GEMMA_LIVE_DFN_MODEL
-    // to a valid path to re-enable.
-    cfg.dfn_model_path = O.dfn_model;
 
     std::string session_err;
     auto session = VoiceSession::create(cfg, &session_err);
@@ -1299,8 +1292,7 @@ int main(int argc, char ** argv) {
     // which need to call abort_turn() without owning the session.
     g_session = session.get();
 
-    // Resolve the actual TTS output rate. With DFN enabled this is 48000;
-    // without DFN it stays at GL_TTS_RATE (24000). Everything downstream —
+    // The TTS output rate. Everything downstream —
     // speaker, AEC render, stats — must use this value, not the constant.
     // Reported here rather than at read time: tokenising needs the model's
     // vocab, which only exists once the session is up.
@@ -1310,10 +1302,9 @@ int main(int argc, char ** argv) {
     }
 
     const int tts_rate = session->tts_sample_rate();
-    fprintf(stderr, "tts      %s @ %d Hz%s\n"
+    fprintf(stderr, "tts      %s @ %d Hz\n"
                     "         voice %s, cfg %.2f, steps %d, anchor %.2f\n",
             tts_model_path.c_str(), tts_rate,
-            tts_rate == GL_TTS_RATE ? "" : " (dfn post-filter active)",
             tts_voice_path.c_str(), cfg.tts_cfg, cfg.tts_steps, cfg.tts_neg_anchor);
 
     // ---- End-of-utterance VAD (required for the listen→reply transition) ----
@@ -1402,7 +1393,7 @@ int main(int argc, char ** argv) {
         queue.clear();
     }
 
-    // ---- Playback device (mono f32, at tts_rate — 24 kHz native or 48 kHz with DFN) ----
+    // ---- Playback device (mono f32, at tts_rate) ----
     audio_ring playback_ring;
     ma_device_config pb_cfg          = ma_device_config_init(ma_device_type_playback);
     pb_cfg.playback.format           = ma_format_f32;
@@ -1584,7 +1575,6 @@ int main(int argc, char ** argv) {
 
     // Start the always-on workers now that everything they depend on exists.
     // Tell AEC how to decimate the render-side reference: 24 kHz normally,
-    // 48 kHz when DFN is on.
     playback_ring.fade_length = (size_t) (12 * tts_rate / 1000);   // ~12 ms
     g_aec.set_render_src_rate(tts_rate);
     g_aec.start();

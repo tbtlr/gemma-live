@@ -35,8 +35,8 @@ git submodule update --init --recursive vendor/localvqe
 
 Upstream will not work for either fork. The streaming `mtmd_audio_stream_*` API
 and the `load_vision`/`load_audio` params live only on that llama.cpp branch;
-the streaming VibeVoice API, the DFN post-filter and the `crispasr-tts` target
-live only on that CrispASR branch.
+the streaming VibeVoice API and the `crispasr-tts` target live only on that
+CrispASR branch.
 
 Build the two out-of-tree pieces, fetch the weights (~5.2 GB), then build:
 
@@ -124,7 +124,6 @@ tune it. `--help` lists all of them with their defaults.
   sys   --sys-prompt
   mtp   --mtp-off --mtp-model --mtp-draft
   tts   --tts-model --tts-voice --tts-cfg --tts-steps --tts-anchor --tts-chunk --tts-rms
-  dfn   --dfn-model
   aec   --aec-model --aec-threads --aec-gate
   kwd   --kwd-model --kwd-wake --kwd-step --kwd-window --kwd-gpu
         --kwd-ratio --kwd-floor --kwd-nogate --kwd-duck --kwd-debug

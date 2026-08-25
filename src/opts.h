@@ -43,7 +43,6 @@ struct gl_opts {
     int         tts_chunk   = 3;          // latent frames before first audio
     float       tts_rms     = 0.06f;
     bool        tts_cpu     = false;      // opt out of GPU TTS (CUDA path is slow)
-    std::string dfn_model   = "";         // empty = post-filter off
 
     // aec
     std::string aec_model   = "models/localvqe.gguf";
@@ -135,7 +134,6 @@ inline std::vector<gl_opt_def> gl_option_table(gl_opts & o) {
       {"--tts-chunk",   'i', &o.tts_chunk,   "N",    "latent frames in the first chunk; drives ttfa"},
       {"--tts-cpu",     'b', &o.tts_cpu,     nullptr,"run TTS on CPU (much faster than CUDA on Tegra)"},
       {"--tts-rms",     'f', &o.tts_rms,     "X",    "loudness target"},
-      {"--dfn-model",   's', &o.dfn_model,   "PATH", "DeepFilterNet3 post-filter (off if unset)"},
 
       {"--aec-model",   's', &o.aec_model,   "PATH", "LocalVQE model"},
       {"--aec-threads", 'i', &o.aec_threads, "N",    "LocalVQE threads"},
@@ -196,7 +194,6 @@ inline const char * gl_group_title(const std::string & prefix) {
         { "sys",     "system prompt"       },
         { "mtp",     "speculative decoding"},
         { "tts",     "text to speech"      },
-        { "dfn",     "speech enhancement"  },
         { "aec",     "echo cancellation"   },
         { "kwd",     "wake word"           },
         { "vad",     "voice activity"      },

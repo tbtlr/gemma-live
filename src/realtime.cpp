@@ -98,7 +98,7 @@ static void float_to_pcm16(const float * in, size_t n, std::vector<uint8_t> & ou
 
 // Linear resampling. Good enough here because both conversions are between
 // close, related rates (24k<->16k on the way in, 48k->24k on the way out
-// when the DFN post-filter is loaded) on speech that a 0.5B TTS produced;
+// on speech that a 0.5B TTS produced;
 // a polyphase filter would cost more than the artefacts are worth.
 static void resample_linear(const std::vector<float> & in, int sr_in, int sr_out,
                             std::vector<float> & out) {
@@ -1041,7 +1041,7 @@ int main(int argc, char ** argv) {
     // Here the same session answers typed turns as well, so it needs a
     // prompt that tells the two apart. --sys-prompt still overrides.
     O.sys_prompt = "prompts/chat.txt";
-    const std::vector<std::string> groups = {"llm", "sys", "mtp", "tts", "dfn", "vad", "stt", "rt"};
+    const std::vector<std::string> groups = {"llm", "sys", "mtp", "tts", "vad", "stt", "rt"};
     {
         std::string err;
         if (!gl_parse_args(argc, argv, O, &err, groups)) {
@@ -1057,7 +1057,6 @@ int main(int argc, char ** argv) {
     cfg.tts_model_path = O.tts_model;
     cfg.tts_voice_path = O.tts_voice;
     cfg.mtp_model_path = O.mtp_model;
-    cfg.dfn_model_path = O.dfn_model;
     cfg.enable_mtp     = O.mtp_on;
     cfg.mtp_n_draft    = O.mtp_draft;
     cfg.n_ctx          = O.llm_ctx;
@@ -1105,10 +1104,9 @@ int main(int argc, char ** argv) {
                     O.sys_prompt.c_str(), vs->system_tokens());
         }
         const int tts_rate = vs->tts_sample_rate();
-        fprintf(stderr, "tts      %s @ %d Hz%s\n"
+        fprintf(stderr, "tts      %s @ %d Hz\n"
                         "         voice %s, cfg %.2f, steps %d, anchor %.2f\n",
                 O.tts_model.c_str(), tts_rate,
-                tts_rate == GL_TTS_RATE ? "" : " (dfn post-filter active)",
                 O.tts_voice.c_str(), cfg.tts_cfg, cfg.tts_steps, cfg.tts_neg_anchor);
         fprintf(stderr, "vad      firered-vad, %d ms silence\n", O.vad_silence);
         if (stt_ok) fprintf(stderr, "stt      %s (%s)\n", O.stt_model.c_str(), g_stt.kind());

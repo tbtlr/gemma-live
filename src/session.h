@@ -29,9 +29,8 @@
 /* All capture audio fed to push_audio must be mono float32 at this rate. */
 constexpr int GL_MIC_RATE = 16000;
 
-/* TTS native sample rate (what VibeVoice synthesises at). The ACTUAL
- * on_audio rate differs when the DFN post-filter is enabled — ask
- * tts_sample_rate() for the real one. (DFN bumps it to 48000.) */
+/* TTS sample rate — what VibeVoice synthesises at, and what on_audio
+ * fires at. tts_sample_rate() reports it at run time. */
 constexpr int GL_TTS_RATE = 24000;
 
 struct SessionConfig {
@@ -89,11 +88,6 @@ struct SessionConfig {
     std::string mtp_model_path;
     int         mtp_n_draft = 1;
 
-    /* Optional DeepFilterNet3 speech-enhancement post-filter over the
-     * VibeVoice output. A valid DFN gguf path routes every on_audio chunk
-     * through (upsample 24→48 → DFN → emit) and makes tts_sample_rate()
-     * report 48000. Empty to disable. */
-    std::string dfn_model_path;
 
     int   n_ctx            = 8192;
     int   n_predict        = 256;
@@ -192,7 +186,7 @@ public:
     std::function<void(const float * pcm, size_t n)>    on_audio;
     std::function<void()>                               on_done;
 
-    /* Rate on_audio fires at: GL_TTS_RATE, or 48000 when DFN loaded. */
+    /* Rate on_audio fires at. */
     int tts_sample_rate() const;
 
     /* One-shot text -> speech in the loaded voice, at tts_sample_rate().
@@ -206,9 +200,7 @@ public:
      * Uses the same context as the streaming path, so call it BETWEEN turns
      * only; concurrent use with an open TTS stream is not supported.
      *
-     * The DFN post-filter is NOT applied even when loaded — it is a
-     * streaming filter, and the output is only resampled to match. On the
-     * ~300 ms clips this exists for the difference is inaudible. */
+     * Output is at tts_sample_rate(). */
     std::vector<float> synthesize(const std::string & text, std::string * err);
 
     /* True when the MTP draft head loaded and generation is speculative.
@@ -258,9 +250,9 @@ public:
 private:
     VoiceSession();
 
-    /* All model state (llama, mtmd, vibevoice, dfn) lives in Impl so that
+    /* All model state (llama, mtmd, vibevoice) lives in Impl so that
      * main.cpp — which only ever drives the turn protocol — doesn't pull in
-     * llama.h / mtmd.h / vibevoice.h / dfn.h. */
+     * llama.h / mtmd.h / vibevoice.h. */
     struct Impl;
     std::unique_ptr<Impl> impl;
 };
