@@ -186,7 +186,12 @@ body.voice #dict              { display: none; }   /* already listening */
 /* Dictating: the text field gives way to a live waveform and the microphone
    to a discard/keep pair, so the only choices on screen are the two that
    exist. Nothing is written into the box until you keep it. */
-#wave { display: none; flex: 1; height: 36px; align-self: center; }
+/* flex-basis 0 with width:0. drawWave writes canvas.width from the measured
+   layout width each frame, and a canvas's intrinsic width participates in
+   flex sizing unless the basis is zero — so the two can feed back. Belt and
+   braces rather than an observed failure. */
+#wave { display: none; flex: 1 1 0; width: 0; min-width: 0;
+        height: 36px; align-self: center; }
 body.dictating #wave   { display: block; }
 body.dictating #box,
 body.dictating #dict,
@@ -435,7 +440,12 @@ async function sendText(text) {
 let dictCtx = null, dictMic = null, dictNode = null;
 let dictChunks = [], dictLevels = [], dictOn = false;
 
-const LEVEL_SLICES = 5;          // per 100 ms chunk -> ~50 levels a second
+// Levels per 100 ms chunk. This sets the scroll speed: the strip holds
+// ~60 dots, so 5 slices a chunk showed barely a second of audio and raced.
+// 2 gives ~20 a second — three seconds across the strip, and each dot still
+// spans 50 ms, well inside a syllable, so it stays lively rather than
+// averaging speech into a flat line.
+const LEVEL_SLICES = 2;
 
 async function dictStart() {
   try {
