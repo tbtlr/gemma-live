@@ -56,6 +56,7 @@
 
 extern "C" {
 #include "moonshine_streaming.h"
+#include "moonshine.h"
 }
 
 #include "opts.h"
@@ -693,8 +694,17 @@ static void serve_client(int fd, VoiceSession & vs, const gl_opts & O) {
 // rolling window slides. Cost grows with the recording, so poll at ~1 Hz,
 // not per frame.
 struct stt_engine {
-    moonshine_streaming_context * ctx = nullptr;
+    // Moonshine ships two architectures and CrispASR has an API for each: the
+    // streaming models (sliding-window encoder) and the plain ones. They are
+    // not interchangeable — handing moonshine-base to the streaming loader
+    // gets "invalid model metadata" — so --stt-model tries one and then the
+    // other rather than making the caller know which they have.
+    moonshine_streaming_context * sctx = nullptr;   // streaming variants
+    moonshine_context           * pctx = nullptr;   // plain variants
     std::mutex mu;                 // one context, and requests can overlap
+
+    bool loaded() const { return sctx || pctx; }
+    const char * kind() const { return sctx ? "streaming" : pctx ? "plain" : "none"; }
 
     bool init(const std::string & path, int threads, int verbosity) {
         if (path.empty()) return false;
@@ -703,11 +713,19 @@ struct stt_engine {
         params.verbosity   = verbosity >= 2 ? 1 : 0;
         params.use_gpu     = false;
         params.temperature = 0.0f;     // greedy: dictation wants repeatable
-        ctx = moonshine_streaming_init_from_file(path.c_str(), params);
-        return ctx != nullptr;
+        sctx = moonshine_streaming_init_from_file(path.c_str(), params);
+        if (sctx) return true;
+
+        moonshine_init_params pp{};
+        pp.model_path     = path.c_str();
+        pp.tokenizer_path = nullptr;   // resolved next to the model
+        pp.n_threads      = threads > 0 ? threads : 2;
+        pctx = moonshine_init_with_params(pp);
+        return pctx != nullptr;
     }
     void shutdown() {
-        if (ctx) { moonshine_streaming_free(ctx); ctx = nullptr; }
+        if (sctx) { moonshine_streaming_free(sctx); sctx = nullptr; }
+        if (pctx) { moonshine_free(pctx);           pctx = nullptr; }
     }
     // Longest audio handed to the model in one call.
     //
@@ -721,12 +739,20 @@ struct stt_engine {
     static constexpr double SEARCH_S    = 1.5;
 
     std::string transcribe_one(const float * pcm, size_t n) {
-        if (!ctx || n == 0) return {};
-        char * t = moonshine_streaming_transcribe(ctx, pcm, (int) n);
-        if (!t) return {};
-        std::string out(t);
-        free(t);
-        return out;
+        if (n == 0) return {};
+        if (sctx) {
+            char * t = moonshine_streaming_transcribe(sctx, pcm, (int) n);
+            if (!t) return {};
+            std::string out(t);
+            free(t);            // streaming API hands over ownership
+            return out;
+        }
+        if (pctx) {
+            // The plain API returns a pointer it owns; copy, do not free.
+            const char * t = moonshine_transcribe(pctx, pcm, (int) n);
+            return t ? std::string(t) : std::string();
+        }
+        return {};
     }
 
     // Split point for a chunk starting at `from`: the quietest 20 ms frame in
@@ -753,7 +779,7 @@ struct stt_engine {
     std::string transcribe(const std::vector<float> & pcm, int rate, int * n_chunks) {
         std::lock_guard<std::mutex> lk(mu);
         *n_chunks = 0;
-        if (!ctx || pcm.empty()) return {};
+        if (!loaded() || pcm.empty()) return {};
 
         std::string out;
         size_t from = 0;
@@ -775,7 +801,7 @@ struct stt_engine {
 static stt_engine g_stt;
 
 static void serve_transcribe(int fd, const std::string & body) {
-    if (!g_stt.ctx) {
+    if (!g_stt.loaded()) {
         ws::send_http(fd, "503 Service Unavailable", "application/json",
                       json({{"error", "dictation is not available: no --stt-model loaded"}}).dump());
         return;
@@ -1022,7 +1048,7 @@ int main(int argc, char ** argv) {
                 tts_rate == GL_TTS_RATE ? "" : " (dfn post-filter active)",
                 O.tts_voice.c_str(), cfg.tts_cfg, cfg.tts_steps, cfg.tts_neg_anchor);
         fprintf(stderr, "vad      firered-vad, %d ms silence\n", O.vad_silence);
-        if (stt_ok) fprintf(stderr, "stt      %s\n", O.stt_model.c_str());
+        if (stt_ok) fprintf(stderr, "stt      %s (%s)\n", O.stt_model.c_str(), g_stt.kind());
         else        fprintf(stderr, "stt      DISABLED — could not load %s\n",
                             O.stt_model.empty() ? "(no model set)" : O.stt_model.c_str());
     }
@@ -1046,7 +1072,7 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "  http://%s:%d/                 web ui\n", O.rt_host.c_str(), O.rt_port);
         fprintf(stderr, "  ws://%s:%d/v1/realtime        voice session\n", O.rt_host.c_str(), O.rt_port);
         fprintf(stderr, "  http://%s:%d/api/chat         text chat\n", O.rt_host.c_str(), O.rt_port);
-        if (g_stt.ctx) {
+        if (g_stt.loaded()) {
             fprintf(stderr, "  http://%s:%d/api/transcribe   dictation\n",
                     O.rt_host.c_str(), O.rt_port);
         }

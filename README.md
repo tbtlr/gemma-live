@@ -132,6 +132,9 @@ tune it. `--help` lists all of them with their defaults.
   nod   --nod-off --nod-phrases --nod-after --nod-gap --nod-mono
         --nod-per-turn --nod-len --nod-gain --nod-debug --nod-dump
   stt   --stt-model --stt-threads                  (gl-serve only)
+        moonshine-base-q4_k is both faster and more accurate than the
+        streaming tiny — the streaming encoder re-runs overlapping
+        windows, wasted work for single-shot transcription.
   rt    --rt-host --rt-port --rt-ui                (gl-serve only)
   rt    --rt-host --rt-port --rt-ui                (gl-serve only)
   fup   --fup-timeout --fup-hops --fup-gate
@@ -422,6 +425,45 @@ half-finished reply in context teaches the model to truncate itself on later
 turns.
 
 **pcm16 only.** No G.711, no Opus.
+
+## Audio in, or transcribe first?
+
+`gl-bench-stt` answers the same utterance both ways with the same model and
+prompt — audio straight through the mtmd encoder, versus moonshine then
+`push_text` — alternating so both see the same conversation depth.
+
+```bash
+./build/gl-bench-stt models/moonshine-base-q4_k.gguf clip1.wav clip2.wav
+```
+
+Five short clips, Gemma 4 E4B QAT on an M4 Max:
+
+```
+                    ttft      turn
+audio              154 ms    432 ms
+text (stt 64 ms)    79 ms    268 ms
+```
+
+Handed the whole utterance at once, transcribing first wins easily: a
+second of speech is ~25 audio tokens, the same second in words is a
+handful, and the prefill difference dwarfs the ASR pass.
+
+That is not how the server runs, though. It opens the turn on speech onset,
+so the encode and its prefill are paid while the user is still talking; ASR
+cannot start until the utterance is finished. What each path owes at
+end-of-turn:
+
+```
+audio   154 ms   ttft, prefill already done
+text    143 ms   stt 64 + ttft 79, both serial
+```
+
+Within noise of each other — so the choice is not really about latency. The
+audio path keeps everything words throw away, and the transcript is a lossy
+retelling: on one clip moonshine rendered a repeated question three times
+over, where Gemma heard it once. Transcribing first is worth it when you
+need the text anyway, which is why dictation and the thread's user rows use
+it and the reply does not.
 
 ## Development
 

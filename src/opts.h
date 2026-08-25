@@ -80,7 +80,7 @@ struct gl_opts {
     bool        nod_debug     = false;
     std::string nod_dump;
     // stt — dictation: speech in, text back, no conversation turn
-    std::string stt_model   = "models/moonshine-streaming-tiny-q4_k.gguf";
+    std::string stt_model   = "models/moonshine-base-q4_k.gguf";
     int         stt_threads = 2;
 
     // rt — Realtime API server (gl-serve only)

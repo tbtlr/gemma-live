@@ -278,6 +278,14 @@ set_target_properties(gl-serve PROPERTIES
     INSTALL_RPATH "${GL_RPATH}"
 )
 
+# gl-bench-stt — audio straight into Gemma vs transcribe-then-text.
+add_executable(gl-bench-stt tools/gl_bench_stt.cpp)
+target_link_libraries(gl-bench-stt PRIVATE gl-session)
+set_target_properties(gl-bench-stt PROPERTIES
+    BUILD_RPATH   "${GL_RPATH}"
+    INSTALL_RPATH "${GL_RPATH}"
+)
+
 enable_testing()
 foreach(t barge transcript nod)
     add_executable(${t}-test tests/${t}_test.cpp)
