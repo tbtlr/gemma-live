@@ -591,22 +591,37 @@ function drawWave() {
   const dim  = cs.getPropertyValue('--muted-foreground').trim();
 
   for (let i = 0; i < cols; i++) {
-    // Newest on the right: walk the tail of the level history.
+    const x = i * GAP + GAP / 2;
+    // Newest on the right: walk the tail of the amplitude history.
     const idx = dictAmps.length - cols + i;
-    // Zero is room tone, and draws as a bare dot: a round cap on a
-    // zero-length stroke. It has to be legible on its own next to a
-    // full-height bar, so it is only a little dimmer, not a faint speck.
-    const amp = idx >= 0 ? dictAmps[idx] : 0;
-    const speaking = amp > 0;
-    const len = amp * (mid - R);
-    wctx.strokeStyle = speaking ? fg : dim;
-    wctx.globalAlpha = speaking ? 0.35 + amp * 0.65 : 0.75;
-    wctx.lineWidth = R * 2;
-    wctx.lineCap = 'round';
+    const amp = idx >= 0 ? (dictAmps[idx] || 0) : 0;
+
+    // The dot goes down first and unconditionally: a column is never blank,
+    // whatever the level says. A row of dots is the strip's resting state.
+    //
+    // As an explicit filled circle, NOT a round cap on a zero-length stroke.
+    // Blink paints that degenerate subpath, WebKit skips it, so the pauses
+    // came out empty in Safari however the classifier had scored them. An
+    // arc has no such ambiguity.
+    wctx.fillStyle   = dim;
+    wctx.globalAlpha = 0.75;
     wctx.beginPath();
-    wctx.moveTo(i * GAP + GAP / 2, mid - len);
-    wctx.lineTo(i * GAP + GAP / 2, mid + len);
-    wctx.stroke();
+    wctx.arc(x, mid, R, 0, Math.PI * 2);
+    wctx.fill();
+
+    // Then the bar over it, once it is actually taller than the dot it would
+    // otherwise hide inside itself.
+    const len = amp * (mid - R);
+    if (len > R) {
+      wctx.strokeStyle = fg;
+      wctx.globalAlpha = 0.35 + amp * 0.65;
+      wctx.lineWidth   = R * 2;
+      wctx.lineCap     = 'round';
+      wctx.beginPath();
+      wctx.moveTo(x, mid - len);
+      wctx.lineTo(x, mid + len);
+      wctx.stroke();
+    }
   }
   wctx.globalAlpha = 1;
 }
