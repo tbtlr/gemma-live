@@ -571,6 +571,16 @@ async function dictAccept() {
 // Dots across the strip, one per recent level, newest at the right. Dotted
 // rather than a filled trace because the composer is a small strip and a
 // solid waveform there reads as a progress bar.
+//
+// Silence is not stillness -- the microphone is open, and the strip has to
+// say so. Scrolling alone cannot: every quiet column holds the same value,
+// so a row of identical dots slides along looking perfectly frozen. Instead
+// a slow swell of brightness and size travels through the dots, leftward
+// with the history. They stay ON the midline, which is what "no signal"
+// means here; lifting them off it would imply one. Bars carry their own
+// motion, so only the dots take this.
+const DOT_WAVELEN = 130;   // px between crests — a few of them across the strip
+const DOT_SPEED   = 55;    // px a second; a given dot cycles every ~2.4 s
 const wave = $('#wave'), wctx = wave.getContext('2d');
 function drawWave() {
   if (!document.body.classList.contains('dictating')) return;
@@ -586,6 +596,7 @@ function drawWave() {
   const GAP = 10, R = 1.6;   // spaced enough to read as dots, not a bar chart
   const cols = Math.floor(w / GAP);
   const mid  = h / 2;
+  const t    = performance.now() / 1000;
   const cs   = getComputedStyle(document.documentElement);
   const fg   = cs.getPropertyValue('--foreground').trim();
   const dim  = cs.getPropertyValue('--muted-foreground').trim();
@@ -603,10 +614,12 @@ function drawWave() {
     // Blink paints that degenerate subpath, WebKit skips it, so the pauses
     // came out empty in Safari however the classifier had scored them. An
     // arc has no such ambiguity.
+    const swell = 0.5 + 0.5 * Math.sin(2 * Math.PI *
+                  (x + t * DOT_SPEED) / DOT_WAVELEN);
     wctx.fillStyle   = dim;
-    wctx.globalAlpha = 0.75;
+    wctx.globalAlpha = 0.5 + swell * 0.4;
     wctx.beginPath();
-    wctx.arc(x, mid, R, 0, Math.PI * 2);
+    wctx.arc(x, mid, R * (0.8 + swell * 0.4), 0, Math.PI * 2);
     wctx.fill();
 
     // Then the bar over it, once it is actually taller than the dot it would
