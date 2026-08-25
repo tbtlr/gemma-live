@@ -333,6 +333,33 @@ definition and would invite exactly that.
 Chrome and Safari treat `http://localhost` as a secure context, so the
 microphone works without TLS. Reaching it from another machine needs HTTPS.
 
+### Two prompts
+
+`gemma-live` is voice-only and `prompts/chat.txt` says so on every line —
+one sentence, no markdown, numbers in words. `gl-serve` answers typed turns
+through the same session, so it defaults to `prompts/web.txt` instead;
+`--sys-prompt` overrides either.
+
+The web prompt cannot simply be the longer one. A session holds one system
+prompt and voice mode shares it, so spoken replies would become paragraphs
+read aloud — the exact thing the voice prompt exists to prevent. It splits
+on the channel instead, which the model can genuinely see: an audio turn is
+wrapped in the model's audio markers and a text turn is not. Same session,
+same question:
+
+```
+typed    The sky appears blue because of a phenomenon called **Rayleigh
+         scattering**, where the Earth's atmosphere scatters shorter
+         wavelengths of visible light...
+
+spoken   The sky is blue because of Rayleigh scattering, which is when the
+         Earth's atmosphere scatters shorter wavelengths of light, like
+         blue, more than longer wavelengths.
+```
+
+Typed answers use markdown and take the room they need; spoken ones stay to
+a sentence or two with nothing in them that cannot be read aloud.
+
 ### Dictation
 
 `POST /api/transcribe` turns speech into text without taking a conversation
