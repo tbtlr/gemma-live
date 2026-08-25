@@ -306,13 +306,22 @@ body.voice #composer:not(.typing) .round { display: grid; }
 <script>
 const $ = s => document.querySelector(s);
 const RATE = 24000, CHUNK = 2400;
-// Barge-in threshold on the already-echo-cancelled mic: getUserMedia's AEC
-// removes Gemma's own voice, so whatever is left above the floor while she
-// speaks is the user talking over her.
+// Barge-in floor on the mic. getUserMedia's AEC is asked to remove Gemma's
+// own voice, and often does — but it is best-effort, and how much survives
+// depends on the browser, the output device and the sample rate. Over
+// speakers plenty gets through, so nothing here may assume it worked.
 const BARGE_RMS = 0.02, BARGE_HOLD = 3;
+// ...so barge-in also has to out-shout the echo, not just the floor: the
+// residual scales with how loud she is, and the user talking over her is
+// much closer to the microphone than the speakers are.
+const BARGE_ECHO = 0.4;
+// Chunks withheld during playback are kept, not dropped — roughly 600 ms, so
+// that if this does turn out to be an interruption the first word survives.
+const HELD_MAX = 6;
 
 let ws, ctx, mic, inAn, outAn, outGain;
 let playCursor = 0, sources = [], loudRun = 0;
+let held = [], outRecent = [], gated = false;
 let speaking = false, voiceOn = false, muted = false, busy = false;
 let liveBot = null, wsResponding = false, httpSpeaking = false;
 
@@ -686,17 +695,29 @@ function fromB64(b64) {
 function stopAudio() {
   for (const s of sources) { try { s.stop(); } catch (_) {} }
   sources = []; playCursor = 0; speaking = false;
-  endHttpSpeech();
+  speechEnded();
 }
 
-// The server suppresses its own turn detection while IT is speaking, but a
-// typed reply is spoken over HTTP and the socket knows nothing about it. So
-// the microphone is gated here instead for the length of that playback —
-// otherwise the mic hears Gemma, the VAD calls it a user turn, and she
-// answers herself. Whatever leaked in before the gate closed is dropped.
-function endHttpSpeech() {
-  if (!httpSpeaking) return;
+// The microphone is gated for the whole length of any playback, and this is
+// not belt-and-braces — the server cannot do it for us. It suppresses turn
+// detection only while a response is ACTIVE, and active means generating.
+// TTS is synthesised faster than realtime, so by the time the last chunk is
+// on the wire the client still has seconds of it to play, and the server has
+// already re-armed its VAD. Feed it the microphone through that window and
+// it hears Gemma, calls her a user turn, and she answers herself.
+//
+// Closing the gate again clears the server's buffer and resets its VAD, so
+// whatever leaked in before it shut cannot be mistaken for the start of a
+// turn.
+function speechEnded() {
+  // Idempotent: stopAudio() empties `sources` and every stopped node still
+  // fires onended afterwards, so this is reached more than once per reply.
+  // Without the guard the late call would clear the buffer a second time —
+  // after a barge-in has already replayed the user's opening words into it.
+  if (!gated) return;
+  gated = false;
   httpSpeaking = false;
+  held = []; outRecent = []; loudRun = 0;
   if (ws && ws.readyState === 1) {
     ws.send(JSON.stringify({ type: 'input_audio_buffer.clear' }));
   }
@@ -712,9 +733,10 @@ function enqueue(f32) {
   sources.push(src);
   src.onended = () => {
     sources = sources.filter(s => s !== src);
-    if (!sources.length) { speaking = false; endHttpSpeech(); }
+    if (!sources.length) { speaking = false; speechEnded(); }
   };
   speaking = true;
+  gated = true;
 }
 
 // ── voice: session ────────────────────────────────────────────────────
@@ -764,29 +786,61 @@ async function openVoice() {
   connectWs();
 }
 
+function rms(x) {
+  let sum = 0;
+  for (let i = 0; i < x.length; i++) sum += x[i] * x[i];
+  return Math.sqrt(sum / x.length);
+}
+// True RMS of what is going to the speakers, in the same units as the mic —
+// getByteFrequencyData would be a dB-ish scale and not comparable.
+function outRms() {
+  if (!outAn) return 0;
+  const d = new Float32Array(outAn.fftSize);
+  outAn.getFloatTimeDomainData(d);
+  return rms(d);
+}
+function sendChunk(f32) {
+  turnAudio.push(f32.slice());
+  ws.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: toB64(f32) }));
+}
+
 function onChunk(f32) {
   if (!ws || ws.readyState !== 1 || muted) return;
-  // Client-side barge-in: the server only runs turn detection when no
-  // response is in flight, so cutting a reply short is the client's job.
-  if (speaking) {
-    let sum = 0;
-    for (let i = 0; i < f32.length; i++) sum += f32[i] * f32[i];
-    if (Math.sqrt(sum / f32.length) > BARGE_RMS) {
+
+  if (speaking || httpSpeaking) {
+    // The echo in THIS chunk left the speaker a moment ago, so comparing it
+    // against the instantaneous output reading would line up the wrong two
+    // things. Take the loudest of the last half second instead — erring
+    // towards not cutting Gemma off.
+    outRecent.push(outRms());
+    if (outRecent.length > 5) outRecent.shift();
+    held.push(f32.slice());
+    if (held.length > HELD_MAX) held.shift();
+
+    // Client-side barge-in: the server runs turn detection only when no
+    // response is in flight, so cutting a reply short is the client's job.
+    // It has to clear the echo as well as the floor, or she interrupts
+    // herself the moment the speakers are loud enough.
+    const thr = Math.max(BARGE_RMS, Math.max(...outRecent) * BARGE_ECHO);
+    if (rms(f32) > thr) {
       if (++loudRun >= BARGE_HOLD) {
         // A typed reply is spoken over HTTP, not the socket, so there is no
         // response for the socket to cancel — asking anyway earns a spurious
         // "no active response" error. Stopping playback is the part that
         // matters either way.
         if (wsResponding) ws.send(JSON.stringify({ type: 'response.cancel' }));
-        stopAudio(); loudRun = 0; endVoiceReply(true);
+        const pending = held;
+        stopAudio();            // resets held, and clears the server buffer
+        endVoiceReply(true);
+        // Now replay what was withheld, so the turn starts at the word that
+        // interrupted her rather than wherever the gate happened to open.
+        for (const c of pending) sendChunk(c);
       }
     } else loudRun = 0;
+    return;   // nothing reaches the turn detector while she is audible
   }
-  // Barge-in above still reads these chunks; they just must not reach the
-  // server's turn detector while it would be hearing Gemma, not you.
-  if (httpSpeaking) return;
-  turnAudio.push(f32.slice());
-  ws.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: toB64(f32) }));
+
+  sendChunk(f32);
 }
 
 // A spoken reply is written into the same thread the typed ones are in, as
