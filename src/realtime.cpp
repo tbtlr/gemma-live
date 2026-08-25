@@ -958,6 +958,10 @@ static void serve_chat(int fd, VoiceSession & vs, const std::string & body) {
                       json({{"error", std::string("bad json: ") + e.what()}}).dump());
         return;
     }
+    // An image on its own is a message. Give it the question the user would
+    // otherwise have had to type, rather than sending a turn with a picture
+    // and no instruction and hoping the model volunteers something.
+    if (msg.empty() && !images.empty()) msg = "What is in this image?";
     if (msg.empty()) {
         ws::send_http(fd, "400 Bad Request", "application/json",
                       json({{"error", "message is empty"}}).dump());
