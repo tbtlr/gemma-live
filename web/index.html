@@ -17,7 +17,7 @@
 <link rel="stylesheet"
       href="https://fonts.googleapis.com/css2?family=Google+Sans+Flex:opsz,wght@6..144,1..1000&display=swap">
 <link rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=Google+Symbols:opsz,wght,FILL,GRAD,ROND@24,100..700,0..1,0..200,100&icon_names=arrow_upward,close,graphic_eq,mic_off&display=swap">
+      href="https://fonts.googleapis.com/css2?family=Google+Symbols:opsz,wght,FILL,GRAD,ROND@24,100..700,0..1,0..200,100&icon_names=arrow_upward,close,graphic_eq,mic,mic_off,stop&display=swap">
 <style>
 /* Design tokens lifted verbatim from llama.cpp's web UI (tools/ui/src/app.css)
    so this sits in the same visual family: shadcn neutral in oklch, one radius. */
@@ -180,6 +180,14 @@ body.gsym .fbk { display: none; }
    offers send. Two buttons side by side made you choose before you had
    decided anything. */
 #composer.typing #mic         { display: none; }
+/* …but not while it is recording: the first partial puts text in the box,
+   which would otherwise hide the only way to stop. */
+#composer.typing #dict:not(.rec) { display: none; }
+body.voice #dict              { display: none; }   /* already listening */
+/* Recording: the button becomes a stop, and says so in the destructive
+   colour, because it is holding the microphone open. */
+#dict.rec { background-color: var(--destructive); color: oklch(0.985 0 0); }
+#dict.rec:hover { background-color: var(--destructive); opacity: .85; }
 #composer:not(.typing) #send  { display: none; }
 /* Same rule in voice mode: once there is something to send, sending is the
    only thing the box should offer. Mute and end come back when it empties. */
@@ -248,6 +256,14 @@ body.voice #composer:not(.typing) .round { display: grid; }
 <footer>
   <form id="composer">
     <textarea id="box" rows="1" placeholder="Ask anything" autocomplete="off"></textarea>
+    <button type="button" class="icon" id="dict" title="Dictate" aria-label="Dictate">
+      <span class="gs">mic</span>
+      <svg class="fbk" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 2a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3z"/>
+        <path d="M19 10v1a7 7 0 0 1-14 0v-1M12 19v3"/>
+      </svg>
+    </button>
     <button type="button" class="icon filled" id="mic" title="Voice mode" aria-label="Voice mode">
       <span class="gs">graphic_eq</span>
       <svg class="fbk" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -382,6 +398,104 @@ async function sendText(text) {
   }
 }
 
+// ── dictation ─────────────────────────────────────────────────────────
+//
+// Speech into the composer, as distinct from voice mode: the words land in
+// the box for you to edit, and nothing is sent until you send it.
+//
+// Its own microphone and AudioContext rather than voice mode's, because the
+// two are mutually exclusive — the dictate button hides in voice mode — and
+// sharing the graph would mean tearing down and rebuilding it on every
+// switch.
+//
+// Partials while you speak come from re-transcribing the whole recording
+// each poll, not a rolling window. Re-running from the start is what makes
+// the text stable instead of rewriting itself as a window slides, and the
+// model is fast enough for it: ~200 ms for 2 s of audio. One request in
+// flight at a time, so a slow pass throttles the polling rather than
+// queueing behind itself.
+let dictCtx = null, dictMic = null, dictNode = null;
+let dictChunks = [], dictBase = '', dictTimer = 0, dictBusy = false, dictOn = false;
+
+async function dictStart() {
+  try {
+    dictMic = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true,
+               autoGainControl: true, channelCount: 1 }
+    });
+  } catch (err) {
+    $('#vstate').textContent = 'microphone denied — ' + err.message;
+    return;
+  }
+  dictCtx = new AudioContext({ sampleRate: RATE });
+  await dictCtx.resume();
+  const code = `class Cap extends AudioWorkletProcessor {
+    constructor(){ super(); this.b = new Float32Array(${CHUNK}); this.n = 0; }
+    process(i){ const c = i[0][0]; if(!c) return true;
+      for (let k=0;k<c.length;k++){ this.b[this.n++]=c[k];
+        if(this.n===${CHUNK}){ this.port.postMessage(this.b.slice()); this.n=0; } }
+      return true; } }
+    registerProcessor('cap', Cap);`;
+  const url = URL.createObjectURL(new Blob([code], { type: 'application/javascript' }));
+  await dictCtx.audioWorklet.addModule(url);
+  URL.revokeObjectURL(url);
+
+  const src = dictCtx.createMediaStreamSource(dictMic);
+  dictNode = new AudioWorkletNode(dictCtx, 'cap');
+  src.connect(dictNode);
+  dictChunks = [];
+  dictBase = box.value ? box.value.replace(/\s*$/, '') + ' ' : '';
+  dictNode.port.onmessage = e => dictChunks.push(e.data);
+
+  dictOn = true;
+  $('#dict').classList.add('rec');
+  $('#dict').title = 'Stop dictating';
+  dictTimer = setInterval(() => dictPoll(false), 1200);
+}
+
+function dictAudio() {
+  let n = 0;
+  for (const c of dictChunks) n += c.length;
+  const all = new Float32Array(n);
+  let at = 0;
+  for (const c of dictChunks) { all.set(c, at); at += c.length; }
+  return all;
+}
+
+async function dictPoll(final) {
+  if (dictBusy && !final) return;          // let a slow pass throttle us
+  const all = dictAudio();
+  if (!all.length) return;
+  dictBusy = true;
+  try {
+    const res = await fetch('/api/transcribe', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ audio: toB64(all), rate: RATE })
+    });
+    const j = await res.json();
+    const text = (j.text || '').trim();
+    if (text) { box.value = dictBase + text; sync(); }
+  } catch (_) {
+    // Leave whatever is in the box; a failed poll is not worth reporting
+    // mid-sentence, and the final pass will try again.
+  } finally {
+    dictBusy = false;
+  }
+}
+
+async function dictStop() {
+  dictOn = false;
+  clearInterval(dictTimer); dictTimer = 0;
+  $('#dict').classList.remove('rec');
+  $('#dict').title = 'Dictate';
+  if (dictNode) { dictNode.port.onmessage = null; dictNode.disconnect(); dictNode = null; }
+  if (dictMic)  { dictMic.getTracks().forEach(t => t.stop()); dictMic = null; }
+  await dictPoll(true);                    // one last pass over the whole take
+  if (dictCtx) { dictCtx.close(); dictCtx = null; }
+  dictChunks = [];
+  box.focus();
+}
+
 // ── composer ──────────────────────────────────────────────────────────
 const box = $('#box');
 function sync() {
@@ -393,6 +507,7 @@ function sync() {
   // Voice is unavailable mid-reply: the session takes one turn at a time, so
   // offering it would only queue behind the answer being written.
   $('#mic').disabled = busy;
+  $('#dict').disabled = busy;
 }
 box.addEventListener('input', sync);
 box.addEventListener('keydown', e => {
@@ -461,6 +576,7 @@ function enqueue(f32) {
 
 // ── voice: session ────────────────────────────────────────────────────
 async function openVoice() {
+  if (dictOn) await dictStop();   // one microphone at a time
   document.body.classList.add('voice');
   // Talking is the primary act here; the box is the alternative, so it says
   // what it is for rather than repeating the general invitation.
@@ -633,6 +749,7 @@ function closeVoice() {
 }
 
 $('#mic').onclick  = () => voiceOn ? closeVoice() : openVoice();
+$('#dict').onclick = () => dictOn ? dictStop() : dictStart();
 $('#hang').onclick = closeVoice;
 // The button turning red is the feedback; a caption saying so as well is
 // one more thing to read.
