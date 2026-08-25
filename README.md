@@ -365,6 +365,42 @@ spoken   The sky is blue because of Rayleigh scattering, which is when the
 Typed answers use markdown and take the room they need; spoken ones stay to
 a sentence or two with nothing in them that cannot be read aloud.
 
+### Images
+
+Off by default. The mmproj already carries a vision tower beside the audio
+one, but loading it costs ~215 MiB of weights, a ~101 MiB Metal compute
+buffer and a 768x768 warmup pass — which a microphone-only client can never
+use. Only `gl-serve` can turn it on, and `gemma-live` will not accept the
+flag at all:
+
+```bash
+./build/gl-serve --llm-vision
+```
+
+Then `POST /api/chat` takes an `images` array beside the message: base64,
+with or without a `data:image/...;base64,` prefix, in any format stb_image
+reads. They are decoded into the turn ahead of the text, because a question
+about a picture means nothing until the picture is in the context.
+
+```bash
+curl -N -X POST http://127.0.0.1:8927/api/chat \
+     -H 'content-type: application/json' \
+     -d '{"message":"What is in this?","images":["data:image/png;base64,..."]}'
+```
+
+The web UI attaches them with the image button, a drag onto the page, or a
+paste — and shrinks anything over 1024px before upload, since the encoder
+throws the extra pixels away anyway.
+
+Two things to expect. An image is a few hundred tokens of prefix (the turn
+log reports `img N tok`) and, unlike audio, there is nothing to overlap the
+encode with — audio is encoded while you are still speaking, which is where
+the low ttft comes from, whereas a turn with a picture in it waits for the
+whole thing. And the token count scales with the image, so a small
+thumbnail is cheap and correspondingly vague: a 400x300 test image encodes
+to 48 tokens and the model reads it about as well as you would expect from
+48 tokens.
+
 ### Dictation
 
 `POST /api/transcribe` turns speech into text without taking a conversation

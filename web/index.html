@@ -17,11 +17,21 @@
 <link rel="stylesheet"
       href="https://fonts.googleapis.com/css2?family=Google+Sans+Flex:opsz,wght@6..144,1..1000&display=swap">
 <link rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=Google+Symbols:opsz,wght,FILL,GRAD,ROND@24,100..700,0..1,0..200,100&icon_names=arrow_upward,check,close,graphic_eq,mic,mic_off,stop&display=swap">
+      href="https://fonts.googleapis.com/css2?family=Google+Symbols:opsz,wght,FILL,GRAD,ROND@24,100..700,0..1,0..200,100&icon_names=add_photo_alternate,arrow_upward,check,close,graphic_eq,mic,mic_off,stop&display=swap">
 <style>
 /* Design tokens lifted verbatim from llama.cpp's web UI (tools/ui/src/app.css)
    so this sits in the same visual family: shadcn neutral in oklch, one radius. */
 :root {
+  /* The one boxy radius in the design: the composer, and anything that has
+     to sit with it. Bubbles are pills and icons are circles; those are the
+     only other shapes. (--radius came with the palette and is unused.) */
+  --radius-box: 1.6rem;
+  /* A thumbnail nested inside the composer takes the CONCENTRIC radius, not
+     the same one: curves that share a centre have to differ by the inset
+     between them, or the inner corner looks wrong. 11px is the composer's
+     7px padding plus the tray's own 4px. At 56px square the box radius
+     would have made them circles. */
+  --radius-inner: calc(var(--radius-box) - 11px);
   --radius: 0.625rem;
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
@@ -140,10 +150,14 @@ body.blank #thread { padding-top: 0; }
    dropping it does not leave the box sitting on the window edge. */
 footer { flex: none; padding: 10px 16px calc(22px + env(safe-area-inset-bottom)); }
 #composer {
-  max-width: 46rem; margin: 0 auto; display: flex; align-items: flex-end; gap: 6px;
-  border: 1px solid var(--input); border-radius: 1.6rem; padding: 7px 7px 7px 16px;
+  max-width: 46rem; margin: 0 auto; display: flex; flex-direction: column;
+  border: 1px solid var(--input); border-radius: var(--radius-box); padding: 7px 7px 7px 16px;
   background: var(--card); transition: border-color .15s;
 }
+/* The old composer row, now one child of it, so attachments can stack above
+   the text without the thumbnails competing with the buttons for the
+   right-hand edge. */
+#row { display: flex; align-items: flex-end; gap: 6px; }
 #composer:focus-within { border-color: var(--ring); }
 #box {
   flex: 1; border: 0; outline: 0; resize: none; background: none; color: inherit;
@@ -233,6 +247,59 @@ body.responding:not(.voice):not(.dictating) #composer #dict { display: none; }
    only thing the box should offer. Mute and end come back when it empties. */
 #composer.typing .round       { display: none; }
 
+/* Pending images stack inside the box, above the text — they are part of
+   the message being written, so the box grows to hold them rather than
+   something separate floating over it. Aligned with the text rather than
+   the border, which is what the composer's left padding already gives. */
+#tray { display: none; gap: 8px; flex-wrap: wrap; padding: 4px 0 8px; }
+#tray:not(:empty) { display: flex; }
+body.dictating #tray, body.voice #tray { display: none; }
+.thumb { position: relative; width: 112px; height: 112px; border-radius: var(--radius-inner);
+         overflow: hidden; border: 1px solid var(--border); flex: none; }
+.thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* Hover only, so a tray of attachments reads as pictures and not as a row of
+   controls. Plain :focus, not :focus-visible — whether the latter fires is a
+   browser heuristic about how focus arrived, and the failure mode is a
+   button you have tabbed to and cannot see. */
+.thumb button {
+  position: absolute; top: 3px; right: 3px; width: 18px; height: 18px;
+  border: 0; border-radius: 50%; cursor: pointer; padding: 0;
+  background: rgba(0,0,0,.65); color: #fff; font: 12px/18px sans-serif;
+  opacity: 0; transition: opacity .12s;
+}
+.thumb:hover button, .thumb button:focus { opacity: 1; }
+/* Where there is no hover there is no reveal, and an attachment you cannot
+   remove is worse than one that looks slightly busy. */
+@media (hover: none) { .thumb button { opacity: 1; } }
+/* Images already sent, shown with the message that carried them. Tight to
+   the bubble beneath — a 6px gap on top of the column's own made them read
+   as two separate messages rather than one with a picture in it. */
+.msg .shots { display: flex; gap: 6px; flex-wrap: wrap; }
+.msg .shots img { max-width: 330px; max-height: 330px; border-radius: var(--radius-box); display: block; }
+.msg.user:has(.shots) { gap: 6px; }
+/* The corner where the two meet. Both are right-aligned, so easing the
+   bubble's top-right in ties it to the image above instead of leaving two
+   unrelated round things stacked up.
+ 
+   All four corners are respecified, and none of them is the 999px pill. CSS
+   scales EVERY radius on a box by one factor when any edge overflows —
+   f = min(edge / sum of its two radii) — so the left edge's 999+999 against
+   a 42px-tall bubble gives f = 0.021 and takes the 25.6px corner down to
+   half a pixel with it. Mixing a pill with a smaller corner cannot work; it
+   silently squares off the corner you were trying to shape.
+ 
+   1.25rem is about half the height of a one-line bubble, so it still reads
+   as a pill, and 20 + 13.6 fits inside 40.5 with no scaling at all. */
+.msg .shots + .body {
+  border-radius: 1.25rem 0.85rem 1.25rem 1.25rem;
+}
+.msg .body:empty { display: none; }
+/* Stays put while you type, unlike mic and voice: a caption for the image
+   you just attached is the normal case, so this is not part of the
+   one-affordance-at-a-time slot on the right. */
+body.voice #attach, body.dictating #attach { display: none; }
+body.responding:not(.voice):not(.dictating) #composer #attach { display: none; }
+
 /* ── voice overlay ────────────────────────────────────────────────── */
 /* Voice mode occupies the conversation area, not the whole window: the
    composer stays live underneath so a thought that is easier typed than
@@ -308,7 +375,10 @@ body.voice #composer:not(.typing) .round { display: grid; }
 </main>
 
 <footer>
+  <input type="file" id="file" accept="image/*" multiple hidden>
   <form id="composer">
+    <div id="tray"></div>
+    <div id="row">
     <textarea id="box" rows="1" placeholder="Ask anything" autocomplete="off"></textarea>
     <canvas id="wave" aria-hidden="true"></canvas>
     <button type="button" class="icon" id="cancel" title="Discard" aria-label="Discard">
@@ -316,6 +386,9 @@ body.voice #composer:not(.typing) .round { display: grid; }
     </button>
     <button type="button" class="icon filled" id="accept" title="Use it" aria-label="Use it">
       <span class="gs">check</span>
+    </button>
+    <button type="button" class="icon" id="attach" title="Add image" aria-label="Add image">
+      <span class="gs">add_photo_alternate</span>
     </button>
     <button type="button" class="icon" id="dict" title="Dictate" aria-label="Dictate">
       <span class="gs">mic</span>
@@ -335,6 +408,7 @@ body.voice #composer:not(.typing) .round { display: grid; }
     <button type="button" class="icon round end" id="hang" title="End voice mode" aria-label="End voice mode">
       <span class="gs">close</span>
     </button>
+    </div>
   </form>
 </footer>
 
@@ -398,9 +472,18 @@ function refreshBlank() {
     document.querySelectorAll('#thread .msg').length === 0);
 }
 
-function addMsg(who, text) {
+function addMsg(who, text, shots) {
   const m = document.createElement('div');
   m.className = 'msg ' + who;
+  if (shots && shots.length) {
+    const g = document.createElement('div');
+    g.className = 'shots';
+    for (const url of shots) {
+      const im = document.createElement('img'); im.src = url; im.alt = 'attached image';
+      g.appendChild(im);
+    }
+    m.appendChild(g);
+  }
   const b = document.createElement('div');
   b.className = 'body'; b.textContent = text;
   m.appendChild(b);
@@ -411,11 +494,97 @@ function addMsg(who, text) {
 }
 const scroll = () => { const m = document.querySelector('main'); m.scrollTop = m.scrollHeight; };
 
+// ── attachments ───────────────────────────────────────────────────────
+//
+// Images ride along with the next typed message. They are held as data URLs
+// because that is both what the tray renders and what the API takes, so
+// there is one representation rather than a blob plus a copy of it.
+let pending = [];
+
+// The model sees a few hundred pixels a side; a phone photo is 4000. Shrinking
+// before upload is not politeness, it is the difference between a turn that
+// starts encoding now and one that spends seconds pushing megabytes through a
+// socket to be thrown away by the preprocessor.
+const IMG_MAX = 1024;
+
+function shrink(file) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onerror = () => reject(new Error('could not read ' + file.name));
+    fr.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('not an image: ' + file.name));
+      img.onload = () => {
+        const scale = Math.min(1, IMG_MAX / Math.max(img.width, img.height));
+        if (scale === 1 && file.size < 800 * 1024) { resolve(fr.result); return; }
+        const c = document.createElement('canvas');
+        c.width  = Math.max(1, Math.round(img.width  * scale));
+        c.height = Math.max(1, Math.round(img.height * scale));
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        // JPEG even for a PNG source: these are photographs and screenshots
+        // being described, not artwork being reproduced, and the size
+        // difference is large.
+        resolve(c.toDataURL('image/jpeg', 0.85));
+      };
+      img.src = fr.result;
+    };
+    fr.readAsDataURL(file);
+  });
+}
+
+function drawTray() {
+  const t = $('#tray');
+  t.textContent = '';
+  pending.forEach((url, i) => {
+    const d = document.createElement('div');
+    d.className = 'thumb';
+    const im = document.createElement('img'); im.src = url; im.alt = '';
+    const x = document.createElement('button');
+    x.type = 'button'; x.textContent = '\u00d7';
+    x.title = 'Remove'; x.setAttribute('aria-label', 'Remove image');
+    x.onclick = () => { pending.splice(i, 1); drawTray(); sync(); };
+    d.append(im, x);
+    t.appendChild(d);
+  });
+  sync();
+}
+
+async function addFiles(files) {
+  for (const f of files) {
+    if (!f.type.startsWith('image/')) continue;
+    try { pending.push(await shrink(f)); }
+    catch (err) { $('#vstate').textContent = err.message; }
+  }
+  drawTray();
+}
+
+$('#attach').onclick = () => $('#file').click();
+$('#file').onchange = e => { addFiles(e.target.files); e.target.value = ''; };
+
+// Paste is how people actually move a screenshot into a chat.
+addEventListener('paste', e => {
+  if (voiceOn || dictOn) return;
+  const files = [...(e.clipboardData?.files || [])].filter(f => f.type.startsWith('image/'));
+  if (!files.length) return;
+  e.preventDefault();
+  addFiles(files);
+});
+// Drop anywhere on the page, not just on the composer: aiming at a 36px
+// button with a dragged file is a needless precision task.
+addEventListener('dragover', e => { if (!voiceOn && !dictOn) e.preventDefault(); });
+addEventListener('drop', e => {
+  if (voiceOn || dictOn) return;
+  const files = [...(e.dataTransfer?.files || [])].filter(f => f.type.startsWith('image/'));
+  if (!files.length) return;
+  e.preventDefault();
+  addFiles(files);
+});
+
 // ── text chat ─────────────────────────────────────────────────────────
-async function sendText(text) {
+async function sendText(text, shots) {
   if (busy) return;
   busy = true; chatAbort = new AbortController(); sync();
-  addMsg('user', text);
+  addMsg('user', text, shots);
   turnMark('start');
   const bot = addMsg('bot', '');
   const body = bot.querySelector('.body');
@@ -427,7 +596,8 @@ async function sendText(text) {
       signal: chatAbort.signal,
       // In voice mode a typed aside is still part of a spoken conversation,
       // so ask for it out loud and play it through the same graph.
-      body: JSON.stringify({ message: text, speak: voiceOn })
+      body: JSON.stringify({ message: text, speak: voiceOn,
+                             ...(shots && shots.length ? { images: shots } : {}) })
     });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const reader = res.body.getReader(), dec = new TextDecoder();
@@ -703,7 +873,8 @@ const box = $('#box');
 function refreshBusy() {
   const responding = busy || wsResponding || speaking || httpSpeaking;
   document.body.classList.toggle('responding', responding);
-  $('#send').disabled = busy || !box.value.trim();
+  const hasInput = !!box.value.trim() || pending.length > 0;
+  $('#send').disabled = busy || !hasInput;
   // Voice is unavailable mid-reply: the session takes one turn at a time, so
   // offering it would only queue behind the answer being written.
   $('#mic').disabled = busy;
@@ -712,7 +883,9 @@ function refreshBusy() {
 function sync() {
   box.style.height = 'auto';
   box.style.height = Math.min(box.scrollHeight, window.innerHeight * 0.4) + 'px';
-  $('#composer').classList.toggle('typing', !!box.value.trim());
+  // "typing" is really "has something to send" — an attached image counts,
+  // or the send button would stay hidden behind the voice one.
+  $('#composer').classList.toggle('typing', !!box.value.trim() || pending.length > 0);
   refreshBusy();
 }
 box.addEventListener('input', sync);
@@ -722,9 +895,13 @@ box.addEventListener('keydown', e => {
 $('#composer').addEventListener('submit', e => {
   e.preventDefault();
   const t = box.value.trim();
-  if (!t || busy) return;
+  // An image on its own is a message: "what is this" is implied, and making
+  // someone type a word to send one would be busywork.
+  if ((!t && !pending.length) || busy) return;
+  const shots = pending;
+  pending = []; drawTray();
   box.value = ''; sync();
-  sendText(t);
+  sendText(t, shots);
 });
 
 // ── voice: audio helpers ──────────────────────────────────────────────
