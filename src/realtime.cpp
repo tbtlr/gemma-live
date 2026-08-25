@@ -158,10 +158,15 @@ static void log_turn(const char * kind, const TurnStats & st, int tts_rate,
     if (ms_ttfa >= 0.0) snprintf(ttfa, sizeof(ttfa), " | ttfa %.0f ms", ms_ttfa);
     char aud[48] = "";
     if (audio_s > 0.0) snprintf(aud, sizeof(aud), " | tts %.2f s | rtf %.2f", audio_s, rtf);
+    // Only when there was one. An image is a few hundred tokens of prefix the
+    // turn waits on with nothing to overlap it, so when ttft looks wrong this
+    // is the first number to check.
+    char img[32] = "";
+    if (st.n_image_tokens > 0) snprintf(img, sizeof(img), " | img %d tok", st.n_image_tokens);
 
-    fprintf(stderr, "[%s | enc %d tok | llm %d tok @ %.1f tok/s | ttft %.0f ms%s%s%s%s"
+    fprintf(stderr, "[%s | enc %d tok%s | llm %d tok @ %.1f tok/s | ttft %.0f ms%s%s%s%s"
                     " | turn %.0f ms]\n",
-            kind, st.n_audio_tokens, st.n_llm_tokens, tok_s, st.ms_ttft,
+            kind, st.n_audio_tokens, img, st.n_llm_tokens, tok_s, st.ms_ttft,
             ttfa, aud, mtp, wait, ms_total);
 }
 
@@ -923,10 +928,31 @@ static void serve_chat(int fd, VoiceSession & vs, const std::string & body) {
     // loud like everything else in that conversation; a plain text client
     // does not, and synthesis is by far the longest part of a turn.
     bool speak = false;
+    // Each entry is one encoded image (png, jpeg, ...) as base64, with or
+    // without a "data:image/...;base64," prefix — the browser hands us data
+    // URLs and stripping it here beats making every client do it.
+    std::vector<std::vector<uint8_t>> images;
     try {
         const auto j = json::parse(body);
         msg   = j.value("message", "");
         speak = j.value("speak", false);
+        if (j.contains("images") && j["images"].is_array()) {
+            for (const auto & item : j["images"]) {
+                if (!item.is_string()) continue;
+                std::string b64 = item.get<std::string>();
+                const auto comma = b64.find(',');
+                if (b64.rfind("data:", 0) == 0 && comma != std::string::npos) {
+                    b64 = b64.substr(comma + 1);
+                }
+                std::vector<uint8_t> bytes;
+                if (!ws::b64_decode(b64, bytes) || bytes.empty()) {
+                    ws::send_http(fd, "400 Bad Request", "application/json",
+                                  json({{"error", "images must be base64"}}).dump());
+                    return;
+                }
+                images.push_back(std::move(bytes));
+            }
+        }
     } catch (const std::exception & e) {
         ws::send_http(fd, "400 Bad Request", "application/json",
                       json({{"error", std::string("bad json: ") + e.what()}}).dump());
@@ -1006,11 +1032,32 @@ static void serve_chat(int fd, VoiceSession & vs, const std::string & body) {
         };
     }
 
-    bool ok = vs.begin_turn(VoiceSession::turn_kind::text) && vs.push_text(msg);
-    if (ok) ok = vs.end_turn(speak);
+    // Images first, then the words about them: the model reads the turn in
+    // order, and "what is in this picture" only means anything once the
+    // picture is already in the context.
+    const bool opened = vs.begin_turn(VoiceSession::turn_kind::text);
+    bool ok = opened;
+    for (const auto & img : images) {
+        if (!ok) break;
+        ok = vs.push_image(img.data(), img.size());
+    }
+    if (ok) ok = vs.push_text(msg);
 
-    if (!ok) emit({{"error", vs.last_error()}});
-    else {
+    if (ok) {
+        ok = vs.end_turn(speak);
+        if (!ok) emit({{"error", vs.last_error()}});
+    } else {
+        // A push that fails leaves the turn OPEN, with its half-decoded prefix
+        // sitting in the KV cache for the next request to build on top of. An
+        // undecodable upload is an ordinary thing for a client to send, so
+        // unwind it the way the socket unwinds a discarded utterance. Read the
+        // error first: end_turn overwrites it.
+        const std::string why = vs.last_error();
+        if (opened) { vs.abort_turn(); vs.end_turn(/*speak=*/ false); }
+        emit({{"error", why}});
+    }
+
+    if (ok) {
         const TurnStats & st = vs.last_stats();
         emit({{"done", true},
               {"tokens", st.n_llm_tokens},
@@ -1064,6 +1111,7 @@ int main(int argc, char ** argv) {
     SessionConfig cfg;
     cfg.llm_model_path = O.llm_model;
     cfg.mmproj_path    = O.llm_mmproj;
+    cfg.vision         = O.llm_vision;
     cfg.tts_model_path = O.tts_model;
     cfg.tts_voice_path = O.tts_voice;
     cfg.mtp_model_path = O.mtp_model;

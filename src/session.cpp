@@ -20,6 +20,7 @@
 #include "llama.h"
 #include "log.h"
 #include "mtmd.h"
+#include "mtmd-helper.h"
 #include "sampling.h"
 #include "speculative.h"
 
@@ -290,6 +291,8 @@ struct VoiceSession::Impl {
     mtmd_audio_stream                  * mtmd_stream      = nullptr;
     std::atomic<vibevoice_tts_stream *>  tts_session{nullptr};
     int                                  n_audio_tokens   = 0;
+    int                                  n_image_tokens   = 0;
+    bool                                 vision           = false;
     int                                  n_text_tokens    = 0;
     llama_pos                            n_past_before_turn = 0;
     std::atomic<bool>                    abort_flag{false};
@@ -504,11 +507,12 @@ std::unique_ptr<VoiceSession> VoiceSession::create(const SessionConfig & cfg,
     // Force the audio encoder onto Metal — common_params leaves this on the
     // default (CPU) and the audio mmproj is the dominant prefix cost.
     mparams.use_gpu       = true;
-    // Audio only. The Gemma 4 mmproj carries both towers, and the vision half
-    // is ~215 MiB of weights plus its own ~101 MiB Metal compute buffer plus a
-    // 768x768 warmup pass at startup — none of which this app can ever reach,
-    // since the only thing it ever feeds mtmd is microphone PCM.
-    mparams.load_vision   = false;
+    // Audio always; vision only where images can actually arrive. The Gemma 4
+    // mmproj carries both towers, and the vision half is ~215 MiB of weights
+    // plus its own ~101 MiB Metal compute buffer plus a 768x768 warmup pass at
+    // startup. A microphone-only client never reaches any of it, so it stays
+    // off unless the caller says otherwise.
+    mparams.load_vision   = cfg.vision;
     mparams.load_audio    = true;
     mparams.print_timings = false;
     mparams.n_threads     = s->params.cpuparams.n_threads;
@@ -520,6 +524,13 @@ std::unique_ptr<VoiceSession> VoiceSession::create(const SessionConfig & cfg,
     if (!mtmd_support_audio(s->ctx_mtmd.get())) {
         return fail("mmproj has no audio encoder");
     }
+    // Fail here rather than at the first image: a server that advertises
+    // vision and then rejects every upload is worse than one that will not
+    // start.
+    if (cfg.vision && !mtmd_support_vision(s->ctx_mtmd.get())) {
+        return fail("vision requested but mmproj has no vision encoder");
+    }
+    s->vision = cfg.vision;
     s->sample_rate = mtmd_get_audio_sample_rate(s->ctx_mtmd.get());
 
     // ---- VibeVoice TTS ----
@@ -613,6 +624,7 @@ bool VoiceSession::begin_turn(VoiceSession::turn_kind kind) {
     }
 
     s->n_audio_tokens  = 0;
+    s->n_image_tokens  = 0;
     s->n_text_tokens   = 0;
     s->n_past_before_turn = s->n_past;
     s->prompt_hist_before_turn = s->prompt_hist.size();
@@ -693,6 +705,85 @@ bool VoiceSession::push_text(const std::string & text) {
     return true;
 }
 
+bool VoiceSession::push_image(const unsigned char * bytes, size_t len) {
+    Impl * s = impl.get();
+    if (!bytes || len == 0) { s->error = "push_image: empty image"; return false; }
+    if (!s->in_turn)      { s->error = "push_image: no turn in progress"; return false; }
+    if (!s->turn_is_text) { s->error = "push_image: this is an audio turn"; return false; }
+    if (!s->vision)       { s->error = "push_image: vision is not enabled"; return false; }
+
+    // Decode the file (stb_image under the hood — png, jpeg, and friends).
+    auto wrap = mtmd_helper_bitmap_init_from_buf(s->ctx_mtmd.get(), bytes, len,
+                                                 /*placeholder=*/ false);
+    if (!wrap.bitmap) { s->error = "push_image: could not decode image"; return false; }
+    if (mtmd_bitmap_is_audio(wrap.bitmap)) {
+        // The helper sniffs magic bytes and will happily hand back audio.
+        mtmd_bitmap_free(wrap.bitmap);
+        s->error = "push_image: that is an audio file, not an image";
+        return false;
+    }
+
+    // Let mtmd do the framing. It emits the model's own <|image> / <image|>
+    // as ordinary text chunks around the embeddings, so the markers come from
+    // the same table the audio ones do instead of being spelled out a second
+    // time here and drifting when the arch changes.
+    std::unique_ptr<mtmd_input_chunks, void(*)(mtmd_input_chunks *)>
+        chunks(mtmd_input_chunks_init(), mtmd_input_chunks_free);
+    const std::string marker = mtmd_default_marker();
+    mtmd_input_text txt{};
+    txt.text          = marker.c_str();
+    txt.text_len      = marker.size();
+    txt.add_special   = false;
+    txt.parse_special = true;
+    const mtmd_bitmap * bmps[1] = { wrap.bitmap };
+    const int32_t rc = mtmd_tokenize(s->ctx_mtmd.get(), chunks.get(), &txt, bmps, 1);
+    mtmd_bitmap_free(wrap.bitmap);
+    if (rc != 0) {
+        s->error = "push_image: mtmd_tokenize failed (" + std::to_string(rc) + ")";
+        return false;
+    }
+
+    const int n_chunks = (int) mtmd_input_chunks_size(chunks.get());
+    for (int i = 0; i < n_chunks; i++) {
+        const mtmd_input_chunk * ch = mtmd_input_chunks_get(chunks.get(), i);
+        if (mtmd_input_chunk_get_type(ch) == MTMD_INPUT_CHUNK_TYPE_TEXT) {
+            size_t n = 0;
+            const llama_token * t = mtmd_input_chunk_get_tokens_text(ch, &n);
+            std::vector<llama_token> toks(t, t + n);
+            if (decode_text_tokens(s->lctx, toks, s->n_past, /*seq=*/ 0, s->n_batch,
+                                   /*logits_last=*/ false)) {
+                s->error = "push_image: marker decode failed";
+                return false;
+            }
+            s->prompt_hist.insert(s->prompt_hist.end(), toks.begin(), toks.end());
+            s->n_text_tokens += (int) toks.size();
+            continue;
+        }
+
+        if (mtmd_encode_chunk(s->ctx_mtmd.get(), ch) != 0) {
+            s->error = "push_image: vision encode failed";
+            return false;
+        }
+        const int n_tok = (int) mtmd_input_chunk_get_n_tokens(ch);
+
+        // Image tokens attend to EACH OTHER, not just backwards: Gemma
+        // encodes a picture bidirectionally. Decoding them under the causal
+        // mask every other token uses costs no error and no warning, it just
+        // quietly degrades what the model sees — so the mask goes off for
+        // exactly this batch and back on straight after, including on the
+        // failure path.
+        const bool non_causal = mtmd_decode_use_non_causal(s->ctx_mtmd.get(), ch);
+        if (non_causal) llama_set_causal_attn(s->lctx, false);
+        const int rc_d = decode_embeddings(s->lctx, mtmd_get_output_embd(s->ctx_mtmd.get()),
+                                           n_tok, s->n_past, /*seq=*/ 0);
+        if (non_causal) llama_set_causal_attn(s->lctx, true);
+        if (rc_d) { s->error = "push_image: image embd decode failed"; return false; }
+
+        s->n_image_tokens += n_tok;
+    }
+    return true;
+}
+
 bool VoiceSession::push_audio(const float * pcm, size_t n_samples) {
     Impl * s = impl.get();
     if (!pcm || n_samples == 0) return false;
@@ -755,6 +846,7 @@ bool VoiceSession::end_turn(bool speak) {
             s->in_turn = false;
             s->error = "end_turn: audio tail decode failed";
             s->stats.n_audio_tokens = s->n_audio_tokens;
+            s->stats.n_image_tokens = s->n_image_tokens;
             return false;
         }
         s->n_audio_tokens += n_tail;
@@ -788,6 +880,7 @@ bool VoiceSession::end_turn(bool speak) {
             s->in_turn = false;
             s->error = "end_turn: suffix decode failed";
             s->stats.n_audio_tokens = s->n_audio_tokens;
+            s->stats.n_image_tokens = s->n_image_tokens;
             return false;
         }
         s->prompt_hist.insert(s->prompt_hist.end(), toks.begin(), toks.end());
@@ -806,6 +899,7 @@ bool VoiceSession::end_turn(bool speak) {
         s->in_turn = false;
         s->error = "end_turn: vibevoice_tts_stream_begin failed";
         s->stats.n_audio_tokens = s->n_audio_tokens;
+        s->stats.n_image_tokens = s->n_image_tokens;
         return false;
     }
     s->tts_session.store(tts);
@@ -965,6 +1059,7 @@ bool VoiceSession::end_turn(bool speak) {
     // Record stats. tts_samples atomic has been written by the worker;
     // we read it now that the worker has joined.
     s->stats.n_audio_tokens = s->n_audio_tokens;
+    s->stats.n_image_tokens = s->n_image_tokens;
     s->stats.n_llm_tokens   = n_generated;
     s->stats.n_tts_samples  = s->tts_samples.load();
     s->stats.n_drafted      = n_drafted;

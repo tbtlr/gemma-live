@@ -146,6 +146,18 @@ struct SessionConfig {
     /* Perceived-loudness target for the TTS normaliser. */
     float tts_target_rms   = 0.06f;
 
+    /* Load the mmproj's vision tower as well as its audio one.
+     *
+     * Off by default, and deliberately: the Gemma 4 mmproj carries both, and
+     * the vision half costs ~215 MiB of weights, its own ~101 MiB Metal
+     * compute buffer, and a 768x768 warmup pass at startup. A microphone-only
+     * client can never reach it, so it should not pay for it. Only turn this
+     * on where images can actually arrive — which today means gl-serve.
+     *
+     * When true, create() fails if the mmproj has no vision encoder, rather
+     * than starting up and refusing every image later. */
+    bool  vision           = false;
+
     /* 0 = silent, 1 = boot/turn info, 2 = ggml/llama diag. */
     int   verbosity        = 1;
 };
@@ -154,6 +166,7 @@ struct SessionConfig {
  * Readable via last_stats() once end_turn() (or abort) has returned. */
 struct TurnStats {
     int    n_audio_tokens = 0;  /* tokens from the mtmd audio encoder         */
+    int    n_image_tokens = 0;  /* tokens from the mtmd vision encoder        */
     int    n_llm_tokens   = 0;  /* LLM tokens sampled (kept; excludes EOS)    */
     int    n_tts_samples  = 0;  /* total samples emitted via on_audio         */
 
@@ -237,6 +250,20 @@ public:
     /* Append user text. Text turns only; call between begin_turn(text) and
      * end_turn(). May be called more than once. */
     bool push_text(const std::string & text);
+
+    /* Append an image. Text turns only, and SessionConfig::vision must have
+     * been set; call between begin_turn(text) and end_turn(), before or
+     * after push_text, as many times as there are images.
+     *
+     * Takes an ENCODED file — png, jpeg, whatever stb_image reads — not raw
+     * pixels; mtmd decodes it. The model's own <|image> markers are emitted
+     * around the embeddings by mtmd_tokenize, so the framing comes from the
+     * same place the audio framing does rather than being spelled out twice.
+     *
+     * There is no streaming equivalent of push_audio here. Audio is encoded
+     * while the user is still talking, which is where the low ttft comes
+     * from; an image is one encode and the turn waits for all of it. */
+    bool push_image(const unsigned char * bytes, size_t len);
 
     /* speak=false samples the reply without opening a TTS stream, for a
      * typed exchange where nobody is listening — the synthesis is by far

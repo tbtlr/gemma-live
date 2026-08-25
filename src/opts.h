@@ -25,6 +25,9 @@ struct gl_opts {
     int         llm_ctx     = 8192;
     int         llm_predict = 256;
     float       llm_temp    = 0.3f;
+    // Opt-in, and only gl-serve offers it — see the table entry for why it is
+    // grouped under the server rather than under llm.
+    bool        llm_vision  = false;
 
     // sys
     std::string sys_prompt  = "prompts/voice.txt";
@@ -103,10 +106,14 @@ struct gl_opts {
 
 struct gl_opt_def {
     const char * flag;
-    char         type;      // s=string i=int f=float b=bool flag
+    char         type;      // s=string i=int f=float b=bool flag, o=bool clear
     void       * p;
     const char * meta;      // argument placeholder, or nullptr for a flag
     const char * help;
+    // Which group owns this flag, when that is NOT the prefix in its name.
+    // Groups are what each binary whitelists, so this is how a flag named for
+    // the subsystem it configures can still be offered by only one binary.
+    const char * group = nullptr;
 };
 
 // Built against a live gl_opts so the table stores real addresses; call with a
@@ -171,6 +178,12 @@ inline std::vector<gl_opt_def> gl_option_table(gl_opts & o) {
       {"--rt-host",     's', &o.rt_host,     "ADDR", "address to bind"},
       {"--rt-port",     'i', &o.rt_port,     "N",    "port to bind"},
       {"--rt-ui",       's', &o.rt_ui,       "PATH", "web ui page to serve at /"},
+      // Named for what it loads, grouped where it can be used: only gl-serve
+      // can receive an image, and the vision tower costs ~215 MiB of weights,
+      // a ~101 MiB Metal buffer and a 768x768 warmup to load, so the CLI must
+      // not even be able to ask for it. Sits here rather than with the other
+      // --llm- flags because the usage printer groups by adjacency.
+      {"--llm-vision",  'b', &o.llm_vision,  nullptr,"load the mmproj's vision tower (images)", "rt"},
 
       {"--fup-timeout", 'i', &o.fup_timeout, "MS",   "how long the follow-up window stays open"},
       {"--fup-hops",    'i', &o.fup_hops,    "N",    "100 ms hops of voice needed to continue"},
@@ -219,8 +232,11 @@ inline bool gl_group_enabled(const std::vector<std::string> & groups, const std:
     return std::find(groups.begin(), groups.end(), g) != groups.end();
 }
 
-inline std::string gl_group_of(const char * flag) {
-    const char * head = flag + 2;
+// An explicit group wins over the one in the flag's name, so a flag can be
+// named for what it configures and still be offered by only one binary.
+inline std::string gl_group_of(const gl_opt_def & d) {
+    if (d.group) return d.group;
+    const char * head = d.flag + 2;
     const char * dash = strchr(head, '-');
     return dash ? std::string(head, dash) : std::string("general");
 }
@@ -241,7 +257,7 @@ inline void gl_usage(FILE * f, const char * argv0,
         // Group by the prefix before the first '-'; flags without one (e.g.
         // --verbosity) fall into "general" rather than constructing a string
         // from a null terminator.
-        const std::string g = gl_group_of(o.flag);
+        const std::string g = gl_group_of(o);
         if (!gl_group_enabled(groups, g)) continue;
         if (g != group) { group = g; fprintf(f, "\n  %s\n", gl_group_title(g)); }
         char left[64];
@@ -270,7 +286,7 @@ inline bool gl_parse_args(int argc, char ** argv, gl_opts & o, std::string * err
         bool matched = false;
         for (const auto & d : tbl) {
             if (a != d.flag) continue;
-            if (!gl_group_enabled(groups, gl_group_of(d.flag))) continue;
+            if (!gl_group_enabled(groups, gl_group_of(d))) continue;
             matched = true;
             // 'b' sets its flag, 'o' clears it. Spelled as a type rather
             // than special-cased by name: the previous version hardcoded
