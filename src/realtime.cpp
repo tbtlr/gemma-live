@@ -956,7 +956,17 @@ static void serve_chat(int fd, VoiceSession & vs, const std::string & body) {
         const std::string line = "data: " + j.dump() + "\n\n";
         std::lock_guard<std::mutex> lk(emit_mu);
         if (broken) return;
-        if (!ws::send_all(fd, line.data(), line.size())) broken = true;
+        if (!ws::send_all(fd, line.data(), line.size())) {
+            broken = true;
+            // The client hung up — pressed stop, closed the tab, or lost the
+            // socket. Nobody will read the rest of this, and generating it
+            // anyway holds the turn lock and the TTS stream that the next
+            // request is waiting on. Safe from either caller: this runs on the
+            // generating thread as on_token and on the TTS worker as
+            // on_audio, and abort_turn only trips an atomic and the TTS
+            // stream's own abort.
+            vs.abort_turn();
+        }
     };
 
     // Save and restore rather than clear. These callbacks are shared state:

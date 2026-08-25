@@ -210,6 +210,18 @@ body.dictating #cancel,
 body.dictating #accept { display: grid; }
 #accept.working { opacity: .55; }
 #composer:not(.typing) #send  { display: none; }
+/* While a reply is being produced, the button that starts one becomes the
+   button that stops it — the same slot, so the eye does not have to hunt
+   for it, and there is never a moment with both. Typing ahead mid-reply is
+   allowed, so this has to beat the .typing rules that would show send. */
+#stop { display: none; }
+body.responding #composer #stop { display: grid; }
+body.responding #composer #send,
+body.responding #composer #mic,
+body.responding #composer #dict { display: none; }
+/* Dictation owns the whole strip; a stop button has no slot there, and no
+   reply can be in flight because dictating is blocked while busy. */
+body.dictating #composer #stop { display: none; }   /* must match the weight above */
 /* Same rule in voice mode: once there is something to send, sending is the
    only thing the box should offer. Mute and end come back when it empties. */
 #composer.typing .round       { display: none; }
@@ -294,6 +306,9 @@ body.voice #composer:not(.typing) .round { display: grid; }
     <button type="submit" class="icon filled" id="send" title="Send" aria-label="Send" disabled>
       <span class="gs">arrow_upward</span>
     </button>
+    <button type="button" class="icon filled" id="stop" title="Stop" aria-label="Stop">
+      <span class="gs">stop</span>
+    </button>
     <button type="button" class="icon round" id="mute" title="Mute" aria-label="Mute">
       <span class="gs">mic_off</span>
     </button>
@@ -324,6 +339,7 @@ let playCursor = 0, sources = [], loudRun = 0;
 let held = [], outRecent = [], gated = false;
 let speaking = false, voiceOn = false, muted = false, busy = false;
 let liveBot = null, wsResponding = false, httpSpeaking = false;
+let chatAbort = null;
 
 // Copy of the audio sent for the turn in progress, kept so the user's own
 // words can be shown in the thread. Gemma consumes audio as tokens and never
@@ -378,7 +394,7 @@ const scroll = () => { const m = document.querySelector('main'); m.scrollTop = m
 // ── text chat ─────────────────────────────────────────────────────────
 async function sendText(text) {
   if (busy) return;
-  busy = true; sync();
+  busy = true; chatAbort = new AbortController(); sync();
   addMsg('user', text);
   turnMark('start');
   const bot = addMsg('bot', '');
@@ -388,6 +404,7 @@ async function sendText(text) {
   try {
     const res = await fetch('/api/chat', {
       method: 'POST', headers: { 'content-type': 'application/json' },
+      signal: chatAbort.signal,
       // In voice mode a typed aside is still part of a spoken conversation,
       // so ask for it out loud and play it through the same graph.
       body: JSON.stringify({ message: text, speak: voiceOn })
@@ -416,11 +433,16 @@ async function sendText(text) {
       }
     }
   } catch (err) {
-    body.textContent += (body.textContent ? '\n' : '') + '[' + err.message + ']';
+    // Stopping is a choice, not a failure — the words already on screen are
+    // the answer, so leave them and say nothing. Dropping the connection is
+    // also what tells the server to stop generating.
+    if (err.name !== 'AbortError') {
+      body.textContent += (body.textContent ? '\n' : '') + '[' + err.message + ']';
+    }
   } finally {
     body.classList.remove('cursor');
     turnReport(voiceOn ? 'text spoken' : 'text');
-    busy = false; sync(); scroll();
+    busy = false; chatAbort = null; sync(); scroll();
   }
 }
 
@@ -651,16 +673,27 @@ function drawWave() {
 
 // ── composer ──────────────────────────────────────────────────────────
 const box = $('#box');
-function sync() {
-  box.style.height = 'auto';
-  box.style.height = Math.min(box.scrollHeight, window.innerHeight * 0.4) + 'px';
-  const typed = !!box.value.trim();
-  $('#composer').classList.toggle('typing', typed);
-  $('#send').disabled = busy || !typed;
+// Everything that depends on a reply being in flight. Separate from sync()
+// because the audio paths call it per chunk, and sync() rewrites the
+// textarea height — a forced reflow ten times a second for nothing.
+//
+// A reply counts as in flight until it has finished being HEARD, not just
+// generated: audio outlives the stream that produced it, and a stop button
+// that vanishes while Gemma is still talking stops the wrong thing.
+function refreshBusy() {
+  const responding = busy || wsResponding || speaking || httpSpeaking;
+  document.body.classList.toggle('responding', responding);
+  $('#send').disabled = busy || !box.value.trim();
   // Voice is unavailable mid-reply: the session takes one turn at a time, so
   // offering it would only queue behind the answer being written.
   $('#mic').disabled = busy;
   $('#dict').disabled = busy;
+}
+function sync() {
+  box.style.height = 'auto';
+  box.style.height = Math.min(box.scrollHeight, window.innerHeight * 0.4) + 'px';
+  $('#composer').classList.toggle('typing', !!box.value.trim());
+  refreshBusy();
 }
 box.addEventListener('input', sync);
 box.addEventListener('keydown', e => {
@@ -697,6 +730,7 @@ function stopAudio() {
   for (const s of sources) { try { s.stop(); } catch (_) {} }
   sources = []; playCursor = 0; speaking = false;
   speechEnded();
+  refreshBusy();
 }
 
 // The microphone is gated for the whole length of any playback, and this is
@@ -734,10 +768,11 @@ function enqueue(f32) {
   sources.push(src);
   src.onended = () => {
     sources = sources.filter(s => s !== src);
-    if (!sources.length) { speaking = false; speechEnded(); }
+    if (!sources.length) { speaking = false; speechEnded(); refreshBusy(); }
   };
   speaking = true;
   gated = true;
+  refreshBusy();
 }
 
 // ── voice: session ────────────────────────────────────────────────────
@@ -804,6 +839,23 @@ function sendChunk(f32) {
   turnAudio.push(f32.slice());
   ws.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: toB64(f32) }));
 }
+
+// The button form of a barge-in. Same three things have to happen — tell
+// the server to stop, stop the playback, close off the half-written bubble —
+// but reached by hand, so there is no withheld audio to replay and no
+// question of whether it was really speech.
+function stopReply() {
+  if (wsResponding && ws && ws.readyState === 1) {
+    ws.send(JSON.stringify({ type: 'response.cancel' }));
+  }
+  // Dropping the SSE connection is what tells the server to abandon a typed
+  // reply; there is no cancel message on that path.
+  if (chatAbort) chatAbort.abort();
+  stopAudio();
+  endVoiceReply(true);
+  refreshBusy();
+}
+$('#stop').onclick = stopReply;
 
 function onChunk(f32) {
   if (!ws || ws.readyState !== 1 || muted) return;
@@ -898,7 +950,10 @@ function connectWs() {
   ws = new WebSocket(proto + location.host + '/v1/realtime');
   ws.onopen  = () => { $('#vstate').textContent = ''; };   // clears a previous failure
   ws.onerror = () => { $('#vstate').textContent = 'connection failed'; };
-  ws.onclose = () => { wsResponding = false; stopAudio(); if (voiceOn) $('#vstate').textContent = 'disconnected'; };
+  ws.onclose = () => {
+    wsResponding = false; stopAudio(); refreshBusy();
+    if (voiceOn) $('#vstate').textContent = 'disconnected';
+  };
   ws.onmessage = ev => {
     const m = JSON.parse(ev.data);
     switch (m.type) {
@@ -916,6 +971,7 @@ function connectWs() {
         break;
       case 'response.created':
         wsResponding = true;
+        refreshBusy();
         if (!turnT0) turnMark('start');    // manual turn_detection: no speech_stopped
         liveBot = addMsg('bot', '');
         liveBot.querySelector('.body').classList.add('cursor');
@@ -929,6 +985,7 @@ function connectWs() {
         enqueue(fromB64(m.delta)); break;
       case 'response.done':
         wsResponding = false;
+        refreshBusy();
         turnReport('voice');
         endVoiceReply(false);
         break;
