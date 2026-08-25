@@ -113,7 +113,9 @@ main { flex: 1; overflow-y: auto; }
 @keyframes pulse { 50% { opacity: .45; } }
 @keyframes blink { 50% { opacity: 0; } }
 
-#empty { color: var(--muted-foreground); text-align: center; padding: 0 0 12px; }
+#empty { display: none; color: var(--muted-foreground); text-align: center;
+         padding: 0 0 12px; }
+body.blank #empty { display: block; }
 
 /* Empty thread: the greeting and the composer sit together in the middle of
    the page and drop into place on the first message. The paired auto margins
@@ -361,15 +363,24 @@ function turnReport(kind) {
 }
 
 // ── thread ────────────────────────────────────────────────────────────
+// The blank state is derived from the thread, not toggled by hand. It used
+// to be switched off the first time a row appeared and never switched back,
+// so a voice turn whose row was removed again — nothing intelligible, or a
+// reply with no text — left the greeting gone and the composer stranded at
+// the bottom of an empty page.
+function refreshBlank() {
+  document.body.classList.toggle('blank',
+    document.querySelectorAll('#thread .msg').length === 0);
+}
+
 function addMsg(who, text) {
-  const e = $('#empty');
-  if (e) { e.remove(); document.body.classList.remove('blank'); }
   const m = document.createElement('div');
   m.className = 'msg ' + who;
   const b = document.createElement('div');
   b.className = 'body'; b.textContent = text;
   m.appendChild(b);
   $('#thread').appendChild(m);
+  refreshBlank();
   scroll();
   return m;
 }
@@ -755,6 +766,7 @@ function endVoiceReply(interrupted) {
   if (!body.textContent.trim()) liveBot.remove();        // nothing was ever said
   else if (interrupted) body.textContent += ' …';
   liveBot = null;
+  refreshBlank();
 }
 
 // Show the user's spoken turn. The row goes in now — before the reply's row,
@@ -786,6 +798,7 @@ async function showSpokenTurn() {
   } catch (_) {
     row.remove();                          // dictation unavailable — say nothing
   } finally {
+    refreshBlank();
     body.classList.remove('pending');
     scroll();
   }
@@ -844,6 +857,7 @@ function closeVoice() {
   ctx = null; inAn = outAn = null;
   document.body.classList.remove('voice');
   $('#box').placeholder = 'Ask anything';
+  refreshBlank();
 }
 
 $('#mic').onclick  = () => voiceOn ? closeVoice() : openVoice();
@@ -952,7 +966,19 @@ if (document.fonts && document.fonts.load) {
   }).catch(() => {});
 }
 
-document.body.classList.add('blank');
+// Greeting by local time. Three bands, not four: "good night" is a
+// farewell in English, so using it to greet someone who just arrived reads
+// as being shown the door. Late hours get "evening" instead.
+(() => {
+  const h = new Date().getHours();
+  const part = h < 5 ? 'evening'
+             : h < 12 ? 'morning'
+             : h < 18 ? 'afternoon'
+             : 'evening';
+  $('#greet').textContent = `Good ${part}, Human`;
+})();
+
+refreshBlank();
 draw();
 sync();
 </script>
