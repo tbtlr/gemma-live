@@ -107,6 +107,10 @@ main { flex: 1; overflow-y: auto; }
 .msg.bot .body { width: 100%; line-height: 1.75; white-space: pre-wrap; overflow-wrap: anywhere; }
 .msg.bot .info { font-size: 11px; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
 .cursor::after { content: '▍'; opacity: .6; animation: blink 1.1s steps(2) infinite; }
+/* Waiting on the transcript: a bubble the width of a few words, pulsing, so
+   the turn is visible before the words are. */
+.pending { min-width: 3.2rem; min-height: 1.5em; animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .45; } }
 @keyframes blink { 50% { opacity: 0; } }
 
 #empty { color: var(--muted-foreground); text-align: center; padding: 0 0 12px; }
@@ -287,6 +291,14 @@ let ws, ctx, mic, inAn, outAn, outGain;
 let playCursor = 0, sources = [], loudRun = 0;
 let speaking = false, voiceOn = false, muted = false, busy = false;
 let liveBot = null, wsResponding = false, httpSpeaking = false;
+
+// Copy of the audio sent for the turn in progress, kept so the user's own
+// words can be shown in the thread. Gemma consumes audio as tokens and never
+// emits a transcript of it, so the row is filled by /api/transcribe — a
+// different model, off the turn lock, running alongside the reply rather
+// than in front of it. Nothing waits on it: the row appears immediately and
+// the words arrive when they arrive.
+let turnAudio = [];
 
 // Per-turn timing as the page experiences it. The server logs its own half;
 // the difference between the two ttfa numbers is transport plus the
@@ -514,6 +526,7 @@ function onChunk(f32) {
   // Barge-in above still reads these chunks; they just must not reach the
   // server's turn detector while it would be hearing Gemma, not you.
   if (httpSpeaking) return;
+  turnAudio.push(f32.slice());
   ws.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: toB64(f32) }));
 }
 
@@ -530,6 +543,40 @@ function endVoiceReply(interrupted) {
   liveBot = null;
 }
 
+// Show the user's spoken turn. The row goes in now — before the reply's row,
+// which response.created adds next — and its text is filled in later.
+async function showSpokenTurn() {
+  const chunks = turnAudio;
+  turnAudio = [];
+  if (!chunks.length) return;
+
+  const row = addMsg('user', '');
+  const body = row.querySelector('.body');
+  body.classList.add('pending');
+
+  let n = 0;
+  for (const c of chunks) n += c.length;
+  const all = new Float32Array(n);
+  let at = 0;
+  for (const c of chunks) { all.set(c, at); at += c.length; }
+
+  try {
+    const res = await fetch('/api/transcribe', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ audio: toB64(all), rate: RATE })
+    });
+    const j = await res.json();
+    const text = (j.text || '').trim();
+    if (text) { body.textContent = text; }
+    else      { row.remove(); }            // nothing intelligible: no empty bubble
+  } catch (_) {
+    row.remove();                          // dictation unavailable — say nothing
+  } finally {
+    body.classList.remove('pending');
+    scroll();
+  }
+}
+
 function connectWs() {
   const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
   ws = new WebSocket(proto + location.host + '/v1/realtime');
@@ -542,6 +589,7 @@ function connectWs() {
       case 'input_audio_buffer.speech_started':
       case 'input_audio_buffer.speech_stopped':
         turnMark('start');                 // the server starts the turn here
+        showSpokenTurn();
         break;
       case 'response.created':
         wsResponding = true;
@@ -573,6 +621,7 @@ function connectWs() {
 
 function closeVoice() {
   voiceOn = false;
+  turnAudio = [];
   endVoiceReply(true);
   if (ws) ws.close();
   stopAudio();

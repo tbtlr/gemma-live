@@ -262,6 +262,16 @@ Voice mode shows no text at all. What Gemma says streams into the chat
 thread as it arrives, so closing voice mode leaves the conversation where
 you can read it.
 
+Your own spoken turns appear there too, which takes a second model: Gemma
+consumes audio as tokens and never emits a transcript of what it heard. The
+page posts the turn's audio to `/api/transcribe` at the moment speech stops
+and drops a placeholder bubble in straight away, so the row is there before
+the words are. Nothing waits on it — moonshine is a different model, the
+route deliberately skips the turn lock, and the two run side by side.
+Measured over four turns, a reply with transcription running alongside it
+reached first audio in 281 and 283 ms against 295 and 286 ms without: no
+cost to the voice turn, and the transcription itself absorbs the wait.
+
 Both share one model context, so they are genuinely one conversation — ask
 something aloud, then follow up by typing, and the pronoun resolves. Spoken
 replies land in the same thread as typed ones, tagged as voice.
