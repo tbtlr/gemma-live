@@ -252,13 +252,16 @@ stream as `{"audio": "<base64 pcm16>"}`, which is what the page does for a
 message typed during voice mode: an aside typed into a spoken conversation
 is still answered out loud.
 
-**Press the microphone** to dictate: speech lands in the composer as
-editable text and nothing is sent until you send it. Partials appear while
-you talk, from re-transcribing the whole take each poll rather than a
-rolling window — running from the start is what keeps the text stable
-instead of rewriting itself as a window slides. The button turns red and
-becomes stop; it stays visible once words arrive, which the send button
-would otherwise hide.
+**Press the microphone** to dictate. The text field gives way to a live
+waveform and the microphone to discard/keep, so the only choices on screen
+are the two that exist. Keep transcribes the take and appends it to
+whatever was already in the box, editable, sent only when you send it;
+discard throws the audio away and leaves the box untouched.
+
+Nothing is written into the box while you talk, and there is no polling
+either — a half-transcribed sentence rewriting itself as you speak is
+noise, and the waveform already says the microphone is live. One pass over
+the whole take on keep.
 
 **Press the wave** for voice mode: the orb takes over the conversation area
 and animates whichever side has the floor. The composer stays live below and

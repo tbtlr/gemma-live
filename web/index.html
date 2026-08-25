@@ -17,7 +17,7 @@
 <link rel="stylesheet"
       href="https://fonts.googleapis.com/css2?family=Google+Sans+Flex:opsz,wght@6..144,1..1000&display=swap">
 <link rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=Google+Symbols:opsz,wght,FILL,GRAD,ROND@24,100..700,0..1,0..200,100&icon_names=arrow_upward,close,graphic_eq,mic,mic_off,stop&display=swap">
+      href="https://fonts.googleapis.com/css2?family=Google+Symbols:opsz,wght,FILL,GRAD,ROND@24,100..700,0..1,0..200,100&icon_names=arrow_upward,check,close,graphic_eq,mic,mic_off,stop&display=swap">
 <style>
 /* Design tokens lifted verbatim from llama.cpp's web UI (tools/ui/src/app.css)
    so this sits in the same visual family: shadcn neutral in oklch, one radius. */
@@ -180,14 +180,23 @@ body.gsym .fbk { display: none; }
    offers send. Two buttons side by side made you choose before you had
    decided anything. */
 #composer.typing #mic         { display: none; }
-/* …but not while it is recording: the first partial puts text in the box,
-   which would otherwise hide the only way to stop. */
-#composer.typing #dict:not(.rec) { display: none; }
+#composer.typing #dict        { display: none; }
 body.voice #dict              { display: none; }   /* already listening */
-/* Recording: the button becomes a stop, and says so in the destructive
-   colour, because it is holding the microphone open. */
-#dict.rec { background-color: var(--destructive); color: oklch(0.985 0 0); }
-#dict.rec:hover { background-color: var(--destructive); opacity: .85; }
+
+/* Dictating: the text field gives way to a live waveform and the microphone
+   to a discard/keep pair, so the only choices on screen are the two that
+   exist. Nothing is written into the box until you keep it. */
+#wave { display: none; flex: 1; height: 36px; align-self: center; }
+body.dictating #wave   { display: block; }
+body.dictating #box,
+body.dictating #dict,
+body.dictating #mic,
+body.dictating #send,
+body.dictating .round  { display: none; }
+#cancel, #accept       { display: none; }
+body.dictating #cancel,
+body.dictating #accept { display: grid; }
+#accept.working { opacity: .55; }
 #composer:not(.typing) #send  { display: none; }
 /* Same rule in voice mode: once there is something to send, sending is the
    only thing the box should offer. Mute and end come back when it empties. */
@@ -256,6 +265,17 @@ body.voice #composer:not(.typing) .round { display: grid; }
 <footer>
   <form id="composer">
     <textarea id="box" rows="1" placeholder="Ask anything" autocomplete="off"></textarea>
+    <canvas id="wave" aria-hidden="true"></canvas>
+    <button type="button" class="icon" id="cancel" title="Discard" aria-label="Discard">
+      <span class="gs">close</span>
+      <svg class="fbk" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2.4" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+    </button>
+    <button type="button" class="icon filled" id="accept" title="Use it" aria-label="Use it">
+      <span class="gs">check</span>
+      <svg class="fbk" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+    </button>
     <button type="button" class="icon" id="dict" title="Dictate" aria-label="Dictate">
       <span class="gs">mic</span>
       <svg class="fbk" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -403,19 +423,19 @@ async function sendText(text) {
 // Speech into the composer, as distinct from voice mode: the words land in
 // the box for you to edit, and nothing is sent until you send it.
 //
-// Its own microphone and AudioContext rather than voice mode's, because the
-// two are mutually exclusive — the dictate button hides in voice mode — and
-// sharing the graph would mean tearing down and rebuilding it on every
-// switch.
+// While recording, the text field is replaced by a live waveform and the
+// microphone by discard/keep. Nothing is written into the box until you
+// keep it — a half-transcribed sentence appearing and rewriting itself as
+// you talk is noise, and the waveform already says the microphone is live.
+// So there is no polling either: one pass over the whole take on keep.
 //
-// Partials while you speak come from re-transcribing the whole recording
-// each poll, not a rolling window. Re-running from the start is what makes
-// the text stable instead of rewriting itself as a window slides, and the
-// model is fast enough for it: ~200 ms for 2 s of audio. One request in
-// flight at a time, so a slow pass throttles the polling rather than
-// queueing behind itself.
+// Its own microphone and AudioContext rather than voice mode's, because the
+// two are mutually exclusive and sharing would mean rebuilding the graph on
+// every switch.
 let dictCtx = null, dictMic = null, dictNode = null;
-let dictChunks = [], dictBase = '', dictTimer = 0, dictBusy = false, dictOn = false;
+let dictChunks = [], dictLevels = [], dictOn = false;
+
+const LEVEL_SLICES = 5;          // per 100 ms chunk -> ~50 levels a second
 
 async function dictStart() {
   try {
@@ -444,56 +464,114 @@ async function dictStart() {
   dictNode = new AudioWorkletNode(dictCtx, 'cap');
   src.connect(dictNode);
   dictChunks = [];
-  dictBase = box.value ? box.value.replace(/\s*$/, '') + ' ' : '';
-  dictNode.port.onmessage = e => dictChunks.push(e.data);
+  dictLevels = [];
+  dictNode.port.onmessage = e => {
+    dictChunks.push(e.data);
+    // A few levels per chunk, so the waveform moves at speech speed rather
+    // than in 100 ms steps.
+    const f = e.data, per = Math.floor(f.length / LEVEL_SLICES);
+    for (let k = 0; k < LEVEL_SLICES; k++) {
+      let sum = 0;
+      for (let i = k * per; i < (k + 1) * per; i++) sum += f[i] * f[i];
+      dictLevels.push(Math.sqrt(sum / per));
+    }
+  };
 
   dictOn = true;
-  $('#dict').classList.add('rec');
-  $('#dict').title = 'Stop dictating';
-  dictTimer = setInterval(() => dictPoll(false), 1200);
+  document.body.classList.add('dictating');
+  drawWave();
 }
 
-function dictAudio() {
+// Release the microphone; keep whatever was captured for the caller to use
+// or throw away.
+function dictRelease() {
+  dictOn = false;
+  if (dictNode) { dictNode.port.onmessage = null; dictNode.disconnect(); dictNode = null; }
+  if (dictMic)  { dictMic.getTracks().forEach(t => t.stop()); dictMic = null; }
+  if (dictCtx)  { dictCtx.close(); dictCtx = null; }
+}
+
+function dictReset() {
+  dictChunks = []; dictLevels = [];
+  document.body.classList.remove('dictating');
+  $('#accept').classList.remove('working');
+  sync();
+}
+
+function dictCancel() {
+  dictRelease();
+  dictReset();
+  box.focus();
+}
+
+async function dictAccept() {
+  dictRelease();
   let n = 0;
   for (const c of dictChunks) n += c.length;
+  if (!n) { dictReset(); box.focus(); return; }
   const all = new Float32Array(n);
   let at = 0;
   for (const c of dictChunks) { all.set(c, at); at += c.length; }
-  return all;
-}
 
-async function dictPoll(final) {
-  if (dictBusy && !final) return;          // let a slow pass throttle us
-  const all = dictAudio();
-  if (!all.length) return;
-  dictBusy = true;
+  // The waveform stays up while this runs — the microphone is closed but
+  // the words are not back yet, and dropping to an empty box would read as
+  // having lost them.
+  $('#accept').classList.add('working');
   try {
     const res = await fetch('/api/transcribe', {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ audio: toB64(all), rate: RATE })
     });
-    const j = await res.json();
-    const text = (j.text || '').trim();
-    if (text) { box.value = dictBase + text; sync(); }
+    const text = ((await res.json()).text || '').trim();
+    if (text) box.value = (box.value ? box.value.replace(/\s*$/, '') + ' ' : '') + text;
   } catch (_) {
-    // Leave whatever is in the box; a failed poll is not worth reporting
-    // mid-sentence, and the final pass will try again.
-  } finally {
-    dictBusy = false;
+    $('#vstate').textContent = 'could not transcribe';
   }
+  dictReset();
+  box.focus();
 }
 
-async function dictStop() {
-  dictOn = false;
-  clearInterval(dictTimer); dictTimer = 0;
-  $('#dict').classList.remove('rec');
-  $('#dict').title = 'Dictate';
-  if (dictNode) { dictNode.port.onmessage = null; dictNode.disconnect(); dictNode = null; }
-  if (dictMic)  { dictMic.getTracks().forEach(t => t.stop()); dictMic = null; }
-  await dictPoll(true);                    // one last pass over the whole take
-  if (dictCtx) { dictCtx.close(); dictCtx = null; }
-  dictChunks = [];
-  box.focus();
+// ── waveform ──────────────────────────────────────────────────────────
+// Dots across the strip, one per recent level, newest at the right. Dotted
+// rather than a filled trace because the composer is a small strip and a
+// solid waveform there reads as a progress bar.
+const wave = $('#wave'), wctx = wave.getContext('2d');
+function drawWave() {
+  if (!document.body.classList.contains('dictating')) return;
+  requestAnimationFrame(drawWave);
+
+  const dpr = devicePixelRatio || 1;
+  const w = wave.clientWidth, h = wave.clientHeight;
+  if (!w || !h) return;
+  if (wave.width !== w * dpr) { wave.width = w * dpr; wave.height = h * dpr; }
+  wctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  wctx.clearRect(0, 0, w, h);
+
+  const GAP = 10, R = 1.6;   // spaced enough to read as dots, not a bar chart
+  const cols = Math.floor(w / GAP);
+  const mid  = h / 2;
+  const cs   = getComputedStyle(document.documentElement);
+  const fg   = cs.getPropertyValue('--foreground').trim();
+  const dim  = cs.getPropertyValue('--muted-foreground').trim();
+
+  for (let i = 0; i < cols; i++) {
+    // Newest on the right: walk the tail of the level history.
+    const idx = dictLevels.length - cols + i;
+    const lvl = idx >= 0 ? dictLevels[idx] : 0;
+    // Speech sits far below full scale; this maps a normal voice across the
+    // strip without clipping a loud one.
+    const amp = Math.min(1, Math.sqrt(lvl) * 3.2);
+    const len = amp * (mid - R);
+    wctx.strokeStyle = lvl > 0 ? fg : dim;
+    wctx.globalAlpha = lvl > 0 ? 0.35 + amp * 0.65 : 0.25;
+    wctx.lineWidth = R * 2;
+    wctx.lineCap = 'round';
+    wctx.beginPath();
+    wctx.moveTo(i * GAP + GAP / 2, mid - len);
+    wctx.lineTo(i * GAP + GAP / 2, mid + len);
+    wctx.stroke();
+  }
+  wctx.globalAlpha = 1;
 }
 
 // ── composer ──────────────────────────────────────────────────────────
@@ -576,7 +654,7 @@ function enqueue(f32) {
 
 // ── voice: session ────────────────────────────────────────────────────
 async function openVoice() {
-  if (dictOn) await dictStop();   // one microphone at a time
+  if (dictOn) dictCancel();   // one microphone at a time
   document.body.classList.add('voice');
   // Talking is the primary act here; the box is the alternative, so it says
   // what it is for rather than repeating the general invitation.
@@ -749,7 +827,9 @@ function closeVoice() {
 }
 
 $('#mic').onclick  = () => voiceOn ? closeVoice() : openVoice();
-$('#dict').onclick = () => dictOn ? dictStop() : dictStart();
+$('#dict').onclick   = dictStart;
+$('#cancel').onclick = dictCancel;
+$('#accept').onclick = dictAccept;
 $('#hang').onclick = closeVoice;
 // The button turning red is the feedback; a caption saying so as well is
 // one more thing to read.
