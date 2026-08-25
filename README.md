@@ -335,9 +335,9 @@ microphone works without TLS. Reaching it from another machine needs HTTPS.
 
 ### Two prompts
 
-`gemma-live` is voice-only and `prompts/chat.txt` says so on every line —
+`gemma-live` is voice-only and `prompts/voice.txt` says so on every line —
 one sentence, no markdown, numbers in words. `gl-serve` answers typed turns
-through the same session, so it defaults to `prompts/web.txt` instead;
+through the same session, so it defaults to `prompts/chat.txt` instead;
 `--sys-prompt` overrides either.
 
 The web prompt cannot simply be the longer one. A session holds one system

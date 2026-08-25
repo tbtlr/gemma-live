@@ -107,7 +107,7 @@ int main(int argc, char ** argv) {
     if (const char * v = std::getenv("GL_TTS_CFG"))    cfg.tts_cfg     = (float) std::atof(v);
     if (const char * v = std::getenv("GL_TTS_FIRST_CHUNK")) cfg.tts_first_chunk_frames = std::max(1, std::atoi(v));
     {
-        const char * pp = env_or("GL_PROMPT", "prompts/chat.txt");
+        const char * pp = env_or("GL_PROMPT", "prompts/voice.txt");
         if (FILE * pf = std::fopen(pp, "rb")) {
             char b[8192];
             const size_t n = std::fread(b, 1, sizeof(b) - 1, pf);

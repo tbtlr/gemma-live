@@ -27,7 +27,7 @@ struct gl_opts {
     float       llm_temp    = 0.3f;
 
     // sys
-    std::string sys_prompt  = "prompts/chat.txt";
+    std::string sys_prompt  = "prompts/voice.txt";
 
     // mtp — speculative decoding. The head must match the trunk; see README.
     bool        mtp_on      = true;

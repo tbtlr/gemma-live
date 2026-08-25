@@ -141,7 +141,7 @@ int main(int argc, char ** argv) {
     cfg.tts_model_path = "models/vibevoice-realtime-0.5b-q4_k.gguf";
     cfg.tts_voice_path = "voices/vibevoice-voice-en-Gemma_woman.gguf";
     cfg.mtp_model_path = "models/mtp-gemma-4-E4B-it-qat-Q4_0.gguf";
-    cfg.system_prompt  = slurp("prompts/chat.txt");
+    cfg.system_prompt  = slurp("prompts/voice.txt");
     cfg.n_predict      = 96;
     cfg.verbosity      = 0;
 
