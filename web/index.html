@@ -213,15 +213,18 @@ body.dictating #accept { display: grid; }
 /* While a reply is being produced, the button that starts one becomes the
    button that stops it — the same slot, so the eye does not have to hunt
    for it, and there is never a moment with both. Typing ahead mid-reply is
-   allowed, so this has to beat the .typing rules that would show send. */
+   allowed, so this has to beat the .typing rules that would show send.
+
+   Two modes sit it out. Voice mode interrupts by talking over her, and the
+   strip there is already carrying mute and end. Dictation owns the whole
+   strip and has no slot to give. Both exclusions live in the selector that
+   shows the button rather than in overrides after it, so there is only one
+   rule to weigh. */
 #stop { display: none; }
-body.responding #composer #stop { display: grid; }
-body.responding #composer #send,
-body.responding #composer #mic,
-body.responding #composer #dict { display: none; }
-/* Dictation owns the whole strip; a stop button has no slot there, and no
-   reply can be in flight because dictating is blocked while busy. */
-body.dictating #composer #stop { display: none; }   /* must match the weight above */
+body.responding:not(.voice):not(.dictating) #composer #stop { display: grid; }
+body.responding:not(.voice):not(.dictating) #composer #send,
+body.responding:not(.voice):not(.dictating) #composer #mic,
+body.responding:not(.voice):not(.dictating) #composer #dict { display: none; }
 /* Same rule in voice mode: once there is something to send, sending is the
    only thing the box should offer. Mute and end come back when it empties. */
 #composer.typing .round       { display: none; }
@@ -855,6 +858,8 @@ function stopReply() {
   endVoiceReply(true);
   refreshBusy();
 }
+// Not bound to voice mode: the button is not offered there, because talking
+// over her already does this and does it without reaching for the mouse.
 $('#stop').onclick = stopReply;
 
 function onChunk(f32) {
