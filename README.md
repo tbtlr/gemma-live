@@ -265,9 +265,11 @@ the whole take on keep.
 
 **Press the wave** for voice mode: a ribbon takes over the conversation
 area — overlapping travelling waves whose amplitude follows the audio,
-tapered to nothing at the ends. Blue is the microphone, amber is Gemma, both
-drawn every frame and translucent, so where they coincide the colours mix
-rather than one hiding the other. The composer stays live below and
+tapered to nothing at the ends. Gemma is her own blue, the middle stop of
+the logo gradient, and the microphone is the page's foreground: white on
+the dark theme, near-black on the light one. Both are drawn every frame and
+translucent, so where they coincide the colours mix rather than one hiding
+the other. The composer stays live below and
 gains mute and end buttons inside it — so a thought that is easier typed
 than spoken does not mean leaving voice mode first. Speaking over Gemma cuts
 her off.

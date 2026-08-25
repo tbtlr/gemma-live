@@ -37,8 +37,14 @@
   --border: oklch(0.875 0 0);
   --input: oklch(0.92 0 0);
   --ring: oklch(0.708 0 0);
-  --listen: oklch(0.488 0.243 264.376);   /* llama --chart-1 */
-  --speak:  oklch(0.769 0.188 70.08);     /* llama --chart-3 */
+  /* Gemma speaks in her own blue — the middle stop of the logo gradient
+     (#446EFF -> #2E96FF -> #B1C5FF), so the ribbon and the mark come from
+     the same palette. The microphone gets the page's own foreground, which
+     is white here and near-black under a light theme; a literal white would
+     be invisible on the light one, and unlike the favicon there is no tile
+     to sit it on. */
+  --speak:  #2E96FF;
+  --listen: var(--foreground);
   --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Monaco, 'Cascadia Code', monospace;
 }
 @media (prefers-color-scheme: dark) {
