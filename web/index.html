@@ -463,22 +463,23 @@ body.voice #composer:not(.typing) .round { display: flex; }
 <script>
 const $ = s => document.querySelector(s);
 const RATE = 24000, CHUNK = 2400;
-// Barge-in floor on the mic. getUserMedia's AEC is asked to remove Gemma's
-// own voice, and often does — but it is best-effort, and how much survives
-// depends on the browser, the output device and the sample rate. Over
-// speakers plenty gets through, so nothing here may assume it worked.
+// Barge-in floor on the mic. Now that playback goes through a media element
+// the browser's canceller has a reference for Gemma's voice and removes it,
+// so what is left above this floor while she speaks is the user talking over
+// her.
 const BARGE_RMS = 0.02, BARGE_HOLD = 3;
 // ...so barge-in also has to out-shout the echo, not just the floor: the
 // residual scales with how loud she is, and the user talking over her is
 // much closer to the microphone than the speakers are.
 const BARGE_ECHO = 0.4;
-// Chunks withheld during playback are kept, not dropped — roughly 600 ms, so
-// that if this does turn out to be an interruption the first word survives.
-const HELD_MAX = 6;
+// Residual echo, sampled while she is audible: mic RMS over output RMS.
+// Prints after each reply, so this can be re-checked on a new device or a
+// new browser without redoing the investigation that produced it.
+let coupling = [];
 
-let ws, ctx, mic, inAn, outAn, outGain;
+let ws, ctx, mic, inAn, outAn, outGain, sink, sinkEl;
 let playCursor = 0, sources = [], loudRun = 0;
-let held = [], outRecent = [], gated = false;
+let outRecent = [], gated = false;
 let speaking = false, voiceOn = false, muted = false, busy = false;
 let liveBot = null, wsResponding = false, httpSpeaking = false;
 let chatAbort = null;
@@ -1047,10 +1048,24 @@ function speechEnded() {
   if (!gated) return;
   gated = false;
   httpSpeaking = false;
-  held = []; outRecent = []; loudRun = 0;
-  if (ws && ws.readyState === 1) {
-    ws.send(JSON.stringify({ type: 'input_audio_buffer.clear' }));
-  }
+  outRecent = []; loudRun = 0;
+  const r = echoReport();
+  if (r) console.log('[echo] residual after the browser AEC:', r);
+}
+
+// dB of the ratio, which is how echo return loss is normally quoted.
+function echoReport() {
+  if (coupling.length < 4) { coupling = []; return null; }
+  const s = coupling.slice().sort((a, b) => a - b);
+  const dB = v => +(20 * Math.log10(Math.max(v, 1e-6))).toFixed(1);
+  const out = {
+    chunks: s.length,
+    quietest_dB: dB(s[0]),
+    median_dB:   dB(s[s.length >> 1]),
+    loudest_dB:  dB(s[s.length - 1]),
+  };
+  coupling = [];
+  return out;
 }
 function enqueue(f32) {
   const buf = ctx.createBuffer(1, f32.length, RATE);
@@ -1090,12 +1105,28 @@ async function openVoice() {
     return;
   }
 
+  // Pinned to the wire rate, so the browser does the 48k -> 24k conversion
+  // on capture with a filtered resampler. Doing it ourselves meant linear
+  // decimation with no anti-aliasing, folding everything above 12 kHz back
+  // into the band — worse audio for no benefit, once the echo canceller
+  // turned out to need a media element rather than a matching sample rate.
   ctx = new AudioContext({ sampleRate: RATE });
   await ctx.resume();
   outGain = ctx.createGain();
   outAn = ctx.createAnalyser(); outAn.fftSize = 512;
   inAn  = ctx.createAnalyser(); inAn.fftSize  = 512;
-  outGain.connect(outAn).connect(ctx.destination);
+  // Playback goes out through a hidden <audio> element fed by a
+  // MediaStreamDestination, NOT ctx.destination. The browser's echo
+  // canceller only subtracts audio it can see as a reference, and
+  // Web-Audio-direct output is not in that set in Chrome — element playback
+  // is. This is the difference between the canceller having a reference for
+  // Gemma's voice and not having one, which is why it bled through however
+  // clean the rest of the path was.
+  sink   = ctx.createMediaStreamDestination();
+  sinkEl = new Audio();
+  sinkEl.srcObject = sink.stream;
+  sinkEl.play().catch(() => {});   // openVoice runs inside the click
+  outGain.connect(outAn).connect(sink);
   const srcNode = ctx.createMediaStreamSource(mic);
   srcNode.connect(inAn);
 
@@ -1140,8 +1171,8 @@ function sendChunk(f32) {
 
 // The button form of a barge-in. Same three things have to happen — tell
 // the server to stop, stop the playback, close off the half-written bubble —
-// but reached by hand, so there is no withheld audio to replay and no
-// question of whether it was really speech.
+// but reached by hand, so there is no question of whether it was really
+// speech.
 function stopReply() {
   if (wsResponding && ws && ws.readyState === 1) {
     ws.send(JSON.stringify({ type: 'response.cancel' }));
@@ -1167,14 +1198,19 @@ function onChunk(f32) {
     // towards not cutting Gemma off.
     outRecent.push(outRms());
     if (outRecent.length > 5) outRecent.shift();
-    held.push(f32.slice());
-    if (held.length > HELD_MAX) held.shift();
+
+    // Residual after the browser's canceller, for ?echo. Only meaningful
+    // while she is actually loud; near-silence makes the ratio noise.
+    const outNow = Math.max(...outRecent);
+    if (outNow > 0.02) coupling.push(rms(f32) / outNow);
 
     // Client-side barge-in: the server runs turn detection only when no
     // response is in flight, so cutting a reply short is the client's job.
-    // It has to clear the echo as well as the floor, or she interrupts
-    // herself the moment the speakers are loud enough.
-    const thr = Math.max(BARGE_RMS, Math.max(...outRecent) * BARGE_ECHO);
+    // The echo term is belt and braces now that the canceller has a
+    // reference — with a low residual it never beats the plain floor — but
+    // it costs nothing and covers a device where that reference does not
+    // land.
+    const thr = Math.max(BARGE_RMS, outNow * BARGE_ECHO);
     if (rms(f32) > thr) {
       if (++loudRun >= BARGE_HOLD) {
         // A typed reply is spoken over HTTP, not the socket, so there is no
@@ -1182,15 +1218,11 @@ function onChunk(f32) {
         // "no active response" error. Stopping playback is the part that
         // matters either way.
         if (wsResponding) ws.send(JSON.stringify({ type: 'response.cancel' }));
-        const pending = held;
-        stopAudio();            // resets held, and clears the server buffer
+        stopAudio();
         endVoiceReply(true);
-        // Now replay what was withheld, so the turn starts at the word that
-        // interrupted her rather than wherever the gate happened to open.
-        for (const c of pending) sendChunk(c);
+        loudRun = 0;
       }
     } else loudRun = 0;
-    return;   // nothing reaches the turn detector while she is audible
   }
 
   sendChunk(f32);
@@ -1313,6 +1345,12 @@ function closeVoice() {
   if (ws) ws.close();
   stopAudio();
   if (mic) mic.getTracks().forEach(t => t.stop());
+  if (sinkEl) {
+    try { sinkEl.pause(); } catch (_) {}
+    sinkEl.srcObject = null;
+    sinkEl = null;
+  }
+  sink = null;
   if (ctx) ctx.close();
   ctx = null; inAn = outAn = null;
   document.body.classList.remove('voice');
