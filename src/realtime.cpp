@@ -497,7 +497,16 @@ struct rt_session {
             pcm16_to_float(bytes, f);
             resample_linear(f, in_rate, GL_MIC_RATE, rs);
             buf.insert(buf.end(), rs.begin(), rs.end());
-            if (turn_open) feed_model();   // encode as it arrives
+            // Encode as it arrives. Server VAD opens the turn from
+            // speech_started below, but a client driving commit by hand
+            // (turn_detection: null) has nothing to open it — the whole
+            // utterance would then be encoded in one stall inside run_turn,
+            // ahead of the first token. Open on the first append instead so
+            // both modes ride the same incremental path. Guarded on !active
+            // for the same reason speech_started is: never open a turn on top
+            // of a response that is still generating.
+            if (turn_open)                          feed_model();
+            else if (!server_vad && !active.load()) open_turn();
 
             if (server_vad && !active.load()) {
                 switch (vad.feed(rs.data(), rs.size())) {
