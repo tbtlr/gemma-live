@@ -119,6 +119,9 @@ main { flex: 1; overflow-y: auto; }
 .msg.bot .body { width: 100%; line-height: 1.75; white-space: pre-wrap; overflow-wrap: anywhere; }
 .msg.bot .info { font-size: 11px; color: var(--muted-foreground); font-variant-numeric: tabular-nums; margin-top: 6px; }
 .cursor::after { content: '▍'; opacity: .6; animation: blink 1.1s steps(2) infinite; }
+/* Status standing in for the reply, not the reply itself — dimmed and
+   breathing so it does not read as the answer having arrived. */
+.thinking { color: var(--muted-foreground); animation: pulse 1.6s ease-in-out infinite; }
 /* Waiting on the transcript: a bubble the width of a few words, pulsing, so
    the turn is visible before the words are. */
 .pending { min-width: 3.2rem; min-height: 1.5em; animation: pulse 1.2s ease-in-out infinite; }
@@ -656,7 +659,17 @@ async function sendText(text, shots) {
   turnMark('start');
   const bot = addMsg('bot', '');
   const body = bot.querySelector('.body');
-  body.classList.add('cursor');
+  // A picture with no question takes noticeably longer to first token than a
+  // typed one — the whole image encodes before generation starts, with
+  // nothing to overlap it. A bare cursor for that long reads as a hang, so
+  // say what is happening instead.
+  const analysing = !text && shots && shots.length;
+  if (analysing) {
+    body.textContent = shots.length > 1 ? 'Analyzing images…' : 'Analyzing image…';
+    body.classList.add('thinking');
+  } else {
+    body.classList.add('cursor');
+  }
 
   try {
     const res = await fetch('/api/chat', {
@@ -679,7 +692,16 @@ async function sendText(text, shots) {
         const line = buf.slice(0, i); buf = buf.slice(i + 2);
         if (!line.startsWith('data: ')) continue;
         const m = JSON.parse(line.slice(6));
-        if (m.delta) { turnMark('tok'); body.textContent += m.delta; scroll(); }
+        if (m.delta) {
+          turnMark('tok');
+          // First token: the status line has served its purpose.
+          if (body.classList.contains('thinking')) {
+            body.textContent = '';
+            body.classList.remove('thinking');
+            body.classList.add('cursor');
+          }
+          body.textContent += m.delta; scroll();
+        }
         if (m.audio && ctx) { turnMark('audio'); httpSpeaking = true; enqueue(fromB64(m.audio)); }
         if (m.error) { body.textContent += '\n[' + m.error + ']'; }
         if (m.done) {
@@ -698,7 +720,7 @@ async function sendText(text, shots) {
       body.textContent += (body.textContent ? '\n' : '') + '[' + err.message + ']';
     }
   } finally {
-    body.classList.remove('cursor');
+    body.classList.remove('cursor', 'thinking');
     turnReport(voiceOn ? 'text spoken' : 'text');
     busy = false; chatAbort = null; sync(); scroll();
   }
