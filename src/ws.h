@@ -291,6 +291,11 @@ inline hs handshake(int fd, request * out, std::string * err) {
         if (sp1 != std::string::npos && sp2 != std::string::npos) {
             out->method = req.substr(0, sp1);
             out->path   = req.substr(sp1 + 1, sp2 - sp1 - 1);
+            // Drop the query. Routing is by path everywhere, so leaving it on
+            // made "/?anything" miss the match for "/" and 404 — every route
+            // was silently query-intolerant, not just the page.
+            const auto q = out->path.find('?');
+            if (q != std::string::npos) out->path.resize(q);
         }
     }
 
