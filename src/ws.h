@@ -253,10 +253,33 @@ enum class hs { upgraded, plain_http, failed };
 struct request {
     std::string method;
     std::string path;
+    std::string query;   // everything after '?', so auth can read it
     std::string body;
 };
 
-inline hs handshake(int fd, request * out, std::string * err) {
+// One parameter out of a query string. Returns empty when absent; no percent
+// decoding, because the only caller compares against a token it chose itself.
+inline std::string param(const std::string & query, const std::string & key) {
+    size_t i = 0;
+    while (i < query.size()) {
+        const size_t amp = query.find('&', i);
+        const size_t end = (amp == std::string::npos) ? query.size() : amp;
+        const size_t eq  = query.find('=', i);
+        if (eq != std::string::npos && eq < end && query.compare(i, eq - i, key) == 0) {
+            return query.substr(eq + 1, end - eq - 1);
+        }
+        if (amp == std::string::npos) break;
+        i = amp + 1;
+    }
+    return {};
+}
+
+// expect_token: when non-empty, a request must carry ?t=<it> or the handshake
+// fails. Checked here so an unauthorised peer is answered 401 and never
+// upgraded — the alternative, completing the upgrade and closing straight
+// after, tells it the endpoint exists and costs a round trip to say no.
+inline hs handshake(int fd, request * out, std::string * err,
+                    const std::string & expect_token = std::string()) {
     std::string req;
     char buf[1024];
     while (req.find("\r\n\r\n") == std::string::npos) {
@@ -291,12 +314,23 @@ inline hs handshake(int fd, request * out, std::string * err) {
         if (sp1 != std::string::npos && sp2 != std::string::npos) {
             out->method = req.substr(0, sp1);
             out->path   = req.substr(sp1 + 1, sp2 - sp1 - 1);
-            // Drop the query. Routing is by path everywhere, so leaving it on
-            // made "/?anything" miss the match for "/" and 404 — every route
-            // was silently query-intolerant, not just the page.
+            // Split the query off. Routing is by path everywhere, so leaving
+            // it on made "/?anything" miss the match for "/" and 404 — every
+            // route was silently query-intolerant, not just the page. It is
+            // kept rather than discarded because a browser cannot set headers
+            // on a WebSocket, so a token has nowhere else to travel.
             const auto q = out->path.find('?');
-            if (q != std::string::npos) out->path.resize(q);
+            if (q != std::string::npos) {
+                out->query = out->path.substr(q + 1);
+                out->path.resize(q);
+            }
         }
+    }
+
+    if (!expect_token.empty() && param(out->query, "t") != expect_token) {
+        send_http(fd, "401 Unauthorized", "text/plain", "unauthorized\n");
+        *err = "bad token";
+        return hs::failed;
     }
 
     const std::string key = value_of("sec-websocket-key");

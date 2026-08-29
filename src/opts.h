@@ -88,6 +88,13 @@ struct gl_opts {
     int         stt_threads = 2;
 
     // rt — Realtime API server (gl-serve only)
+    // Shared secret. Empty (the default) means no check at all, which is
+    // right on loopback and wrong the moment this is behind a tunnel.
+    std::string rt_token;
+    // Seconds of no SPEECH before a session is reclaimed. Not seconds of no
+    // traffic: the microphone streams continuously, so a connection is never
+    // quiet while it is open. 0 disables it.
+    int         rt_idle  = 0;
     std::string rt_host  = "127.0.0.1";
     int         rt_port  = 8927;
     std::string rt_ui    = "web/index.html";
@@ -180,6 +187,8 @@ inline std::vector<gl_opt_def> gl_option_table(gl_opts & o) {
       {"--rt-host",     's', &o.rt_host,     "ADDR", "address to bind"},
       {"--rt-port",     'i', &o.rt_port,     "N",    "port to bind"},
       {"--rt-ui",       's', &o.rt_ui,       "PATH", "web ui page to serve at /"},
+      {"--rt-token",    's', &o.rt_token,    "STR",  "require ?t=STR on every request"},
+      {"--rt-idle",     'i', &o.rt_idle,     "SEC",  "reclaim a session after SEC without speech (0 = never)"},
 
       {"--fup-timeout", 'i', &o.fup_timeout, "MS",   "how long the follow-up window stays open"},
       {"--fup-hops",    'i', &o.fup_hops,    "N",    "100 ms hops of voice needed to continue"},

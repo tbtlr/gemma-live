@@ -477,6 +477,13 @@ const BARGE_ECHO = 0.4;
 // new browser without redoing the investigation that produced it.
 let coupling = [];
 
+// Whatever token this page was opened with, carried on to everything it asks
+// for. A browser cannot put a header on a WebSocket, so the query string is
+// the only channel that works for both the socket and the fetches — and using
+// one channel for both keeps them from drifting apart.
+const TOKEN = new URLSearchParams(location.search).get('t') || '';
+const url = p => TOKEN ? p + (p.includes('?') ? '&' : '?') + 't=' + encodeURIComponent(TOKEN) : p;
+
 let ws, ctx, mic, inAn, outAn, outGain, sink, sinkEl;
 let playCursor = 0, sources = [], loudRun = 0;
 let outRecent = [], gated = false;
@@ -553,7 +560,7 @@ let pending = [];
 // server says otherwise, so a page that loads against a build without the
 // vision tower never offers a button that can only fail.
 let canSeeImages = false;
-fetch('/api/config')
+fetch(url('/api/config'))
   .then(r => r.json())
   .then(c => { canSeeImages = !!c.vision; document.body.classList.toggle('novision', !canSeeImages); })
   .catch(() => { document.body.classList.add('novision'); });
@@ -673,7 +680,7 @@ async function sendText(text, shots) {
   }
 
   try {
-    const res = await fetch('/api/chat', {
+    const res = await fetch(url('/api/chat'), {
       method: 'POST', headers: { 'content-type': 'application/json' },
       signal: chatAbort.signal,
       // In voice mode a typed aside is still part of a spoken conversation,
@@ -867,7 +874,7 @@ async function dictAccept() {
   // having lost them.
   $('#accept').classList.add('working');
   try {
-    const res = await fetch('/api/transcribe', {
+    const res = await fetch(url('/api/transcribe'), {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ audio: toB64(all), rate: RATE })
     });
@@ -1260,7 +1267,7 @@ async function showSpokenTurn() {
   for (const c of chunks) { all.set(c, at); at += c.length; }
 
   try {
-    const res = await fetch('/api/transcribe', {
+    const res = await fetch(url('/api/transcribe'), {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ audio: toB64(all), rate: RATE })
     });
@@ -1279,7 +1286,7 @@ async function showSpokenTurn() {
 
 function connectWs() {
   const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
-  ws = new WebSocket(proto + location.host + '/v1/realtime');
+  ws = new WebSocket(proto + location.host + url('/v1/realtime'));
   ws.onopen  = () => {
     $('#vstate').textContent = '';                        // clears a previous failure
     // Both halves are in place now: the microphone was granted before this

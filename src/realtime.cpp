@@ -170,6 +170,11 @@ static void log_turn(const char * kind, const TurnStats & st, int tts_rate,
             ttfa, aud, mtp, wait, ms_total);
 }
 
+static long long now_ms() {
+    using namespace std::chrono;
+    return duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count();
+}
+
 // ── connection ──────────────────────────────────────────────────────────
 struct rt_conn {
     int        fd = -1;
@@ -237,6 +242,10 @@ struct rt_session {
     // Live response state. `active` gates cancel; both are read from the
     // reader thread, hence atomic.
     std::atomic<bool> active{false};
+    // Last time this session heard SPEECH — not the last packet. Audio arrives
+    // continuously for as long as the socket is open, so packets say only that
+    // a tab exists, which is exactly the case worth reclaiming.
+    std::atomic<long long> last_speech_ms{0};
     std::atomic<bool> cancelled{false};
     std::string       resp_id, item_id;
     std::string       transcript;
@@ -511,6 +520,7 @@ struct rt_session {
             if (server_vad && !active.load()) {
                 switch (vad.feed(rs.data(), rs.size())) {
                     case gl_vad::eou::event::speech_started:
+                        last_speech_ms.store(now_ms());
                         send_event("input_audio_buffer.speech_started", {
                             {"audio_start_ms", (int) (vad.onset_sample * 1000 / GL_MIC_RATE)},
                             {"item_id", new_id("item")}});
@@ -631,16 +641,35 @@ static void serve_client(int fd, VoiceSession & vs, const gl_opts & O) {
         vs.on_done  = nullptr;
     }
 
+    S.last_speech_ms.store(now_ms());
     S.send_event("session.created", {{"session", S.session_object()}});
+
+    // How often the reader wakes with nothing to read. That tick is also when
+    // the idle check runs, so it has to be well under the idle window — at the
+    // old flat 30 s, --rt-idle 8 could never fire before 30.
+    const int poll_ms = (O.rt_idle > 0)
+                      ? std::max(250, std::min(30000, O.rt_idle * 1000 / 4))
+                      : 30000;
 
     evq        q;
     std::thread reader([&] {
         for (;;) {
             ws::op   o;
             std::string payload;
-            const int r = ws::recv_message(fd, &o, &payload, 30000);
+            const int r = ws::recv_message(fd, &o, &payload, poll_ms);
             if (r < 0) break;   // peer gone; the abort below stops any live turn
-            if (r == 0) continue;                     // idle; keep waiting
+            if (r == 0) {                             // recv timed out
+                // Reclaim a session nobody is using. Only while no reply is in
+                // flight: a long answer is not an idle connection, and cutting
+                // one off mid-sentence would be worse than holding the slot.
+                if (O.rt_idle > 0 && !S.active.load()
+                    && now_ms() - S.last_speech_ms.load() > (long long) O.rt_idle * 1000) {
+                    if (O.verbosity > 0) fprintf(stderr, "  [reclaimed: idle]\n");
+                    ws::send_close(fd, 1000, "idle");
+                    break;
+                }
+                continue;
+            }
             if (o != ws::op::text) continue;          // audio rides inside JSON
 
             json ev;
@@ -656,6 +685,10 @@ static void serve_client(int fd, VoiceSession & vs, const gl_opts & O) {
             // stop. abort_turn is documented safe from any thread, and rolls
             // the KV cache back so the next turn is conditioned on what the
             // user actually heard rather than on a reply that was cut off.
+            if (type == "response.create" || type == "input_audio_buffer.commit") {
+                S.last_speech_ms.store(now_ms());   // a hand-driven turn is use
+            }
+
             if ((type == "response.cancel" || type == "conversation.item.truncate")
                 && S.active.load()) {
                 S.cancelled.store(true);
@@ -1231,7 +1264,9 @@ int main(int argc, char ** argv) {
 
         ws::request req;
         std::string herr;
-        const ws::hs r = ws::handshake(fd, &req, &herr);
+        // The token guards every route, not just the socket: locking the
+        // front door and leaving /api/chat open would be no lock at all.
+        const ws::hs r = ws::handshake(fd, &req, &herr, O.rt_token);
         if (r == ws::hs::plain_http) {
             if (req.method == "OPTIONS") {
                 // CORS preflight for a cross-origin /api/chat fetch from a web UI.

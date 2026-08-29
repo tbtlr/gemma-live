@@ -365,6 +365,30 @@ spoken   The sky is blue because of Rayleigh scattering, which is when the
 Typed answers use markdown and take the room they need; spoken ones stay to
 a sentence or two with nothing in them that cannot be read aloud.
 
+### Sharing it
+
+Both off by default, because on loopback neither earns its keep. Together
+they are what makes a tunnel safe to hand out.
+
+```bash
+./build/gl-serve --rt-token s3cret --rt-idle 300
+```
+
+`--rt-token` requires `?t=` on **every** route, checked in the handshake:
+an unauthorised peer gets 401 and is never upgraded. The page passes on
+whatever token it was opened with, so `https://host/?t=s3cret` is the whole
+setup — a browser cannot put a header on a WebSocket, which is why the query
+string carries it for the socket and the fetches alike. It is a shared
+secret, not per-user auth; Cloudflare Access does the real thing for free if
+you want it.
+
+`--rt-idle` reclaims a session after that many seconds **without speech** —
+not without traffic, because the microphone streams continuously and a
+connection is never quiet while it is open. It waits for any reply in flight
+to finish, so a long answer is never cut off. This matters more than the
+token for a public link: the server takes one session at a time, so without
+it a single forgotten tab locks everyone else out indefinitely.
+
 ### Images
 
 On by default in `gl-serve`, off by default in `gemma-live`. The mmproj
