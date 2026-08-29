@@ -271,9 +271,17 @@ struct rt_session {
     // reader's cadence, rather than all at once at end-of-turn.
     bool feed_model() {
         if (!turn_open || buf.empty()) return true;
-        const bool ok = vs.push_audio(buf.data(), buf.size());
-        pushed_samples += buf.size();
-        buf.clear();
+        // Clamped to what is left of the turn's budget. The cap below ends an
+        // over-long turn, but it only gets to look after this returns — and a
+        // single oversized append would reach the encoder's limit inside this
+        // one call. Whatever does not fit stays buffered and becomes the next
+        // turn's pre-roll.
+        size_t n = buf.size();
+        if (pushed_samples + n > MAX_TURN_SAMPLES) n = MAX_TURN_SAMPLES - pushed_samples;
+        if (n == 0) return true;
+        const bool ok = vs.push_audio(buf.data(), n);
+        pushed_samples += n;
+        buf.erase(buf.begin(), buf.begin() + n);
         if (!ok) conn.send_error("server_error", "session_error", vs.last_error());
         return ok;
     }
@@ -514,6 +522,20 @@ struct rt_session {
             pcm16_to_float(bytes, f);
             resample_linear(f, in_rate, GL_MIC_RATE, rs);
             buf.insert(buf.end(), rs.begin(), rs.end());
+
+            // Nothing recorded before a turn opens is ever wanted beyond the
+            // prefix padding the API promises, so keep that and drop the
+            // rest. Unbounded, a connection that is merely quiet — a client
+            // sending digital silence between turns, or zeroing frames during
+            // playback — accumulates every second of it and hands the whole
+            // lot to the encoder the instant speech starts. Forty seconds of
+            // nothing then arrives as a >30 s stream and mtmd asserts, which
+            // takes the process with it.
+            if (!turn_open) {
+                const size_t keep = (size_t) (vad.prefix_pad_ms + 700)
+                                  * (size_t) GL_MIC_RATE / 1000;
+                if (buf.size() > keep) buf.erase(buf.begin(), buf.end() - keep);
+            }
             // Encode as it arrives. Server VAD opens the turn from
             // speech_started below, but a client driving commit by hand
             // (turn_detection: null) has nothing to open it — the whole
@@ -597,7 +619,12 @@ struct rt_session {
     }
 
     void commit() {
-        if (buf.empty()) {
+        // Empty means NOTHING WAS CAPTURED, not "the buffer happens to be
+        // drained". Audio is fed to the model as it arrives, so by the time
+        // the VAD reports end of speech feed_model has already emptied buf —
+        // testing it alone made every healthy turn emit a commit_empty error
+        // that clients had to learn to ignore, and buried the real one.
+        if (buf.empty() && pushed_samples == 0) {
             conn.send_error("invalid_request_error", "input_audio_buffer_commit_empty",
                             "buffer is empty");
             return;
