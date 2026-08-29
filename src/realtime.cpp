@@ -290,6 +290,14 @@ struct rt_session {
 
     size_t pushed_samples = 0;
 
+    // mtmd's gemma4a streaming preprocessor asserts above 30 s in a single
+    // stream, and an assert is a crash, not an error the client can see. A
+    // turn opens on speech onset and closes on speech offset, so anything
+    // that keeps the VAD in "speech" indefinitely — an unbroken monologue,
+    // or room noise it has latched on to — walks straight into it. Ended at
+    // 28 s instead, which answers what was said rather than losing it.
+    static constexpr size_t MAX_TURN_SAMPLES = 28 * (size_t) GL_MIC_RATE;
+
     // ── outbound ────────────────────────────────────────────────────────
     json session_object() const {
         return {
@@ -516,6 +524,23 @@ struct rt_session {
             // of a response that is still generating.
             if (turn_open)                          feed_model();
             else if (!server_vad && !active.load()) open_turn();
+
+            // Cut a turn loose before the encoder's limit rather than after.
+            // Runs whatever the turn-detection mode is: in manual mode the
+            // client would otherwise have to notice this itself, and the cost
+            // of it not noticing is the process dying.
+            if (turn_open && pushed_samples >= MAX_TURN_SAMPLES) {
+                if (O.verbosity > 0) {
+                    fprintf(stderr, "  [turn capped at %zu s of audio]\n",
+                            MAX_TURN_SAMPLES / (size_t) GL_MIC_RATE);
+                }
+                send_event("input_audio_buffer.speech_stopped", {
+                    {"audio_end_ms", (int) (pushed_samples * 1000 / GL_MIC_RATE)},
+                    {"item_id", new_id("item")}});
+                vad.reset();
+                run_turn();
+                return;
+            }
 
             if (server_vad && !active.load()) {
                 switch (vad.feed(rs.data(), rs.size())) {
