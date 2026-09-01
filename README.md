@@ -391,14 +391,20 @@ Control is JSON on the text opcode, with five events out —
 fragment in event_id, response_id, item_id, output_index and content_index
 to describe items and content parts this has none of.
 
-Four verbs in:
+Five verbs in:
 
 ```
-{"t":"end"}      finish the turn now, do not wait for silence
-{"t":"cancel"}   stop the reply
-{"t":"played"}   the reply has finished coming out of the speakers
-{"t":"barge"}    that was the user talking over her, not her own echo
+{"t":"end"}            finish the turn now, do not wait for silence
+{"t":"cancel"}         stop the reply
+{"t":"text","s":"..."} a typed turn, answered and spoken like any other
+{"t":"played"}         the reply has finished coming out of the speakers
+{"t":"barge"}          that was the user talking over her, not her own echo
 ```
+
+`text` is why the web UI no longer opens a second transport onto the same
+conversation: in voice mode a typed aside goes down the socket that is
+already there. `/api/chat` remains for a client with no session open, and
+for images — the socket carries pcm, not pictures.
 
 `played` is the one worth having. The server knows when it stopped
 *generating*, which is seconds before the client stops *playing* — and in

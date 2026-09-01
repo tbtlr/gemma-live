@@ -662,6 +662,19 @@ addEventListener('drop', e => {
 // ── text chat ─────────────────────────────────────────────────────────
 async function sendText(text, shots) {
   if (busy) return;
+
+  // In voice mode the socket is already open on the same session, so a typed
+  // aside goes down it rather than opening a second transport onto the same
+  // conversation. The reply arrives through the ordinary start/txt/end path
+  // and is spoken like any other, so there is nothing here to stream.
+  // Images still need /api/chat: the socket carries pcm, not pictures.
+  if (voiceOn && ws && ws.readyState === 1 && !(shots && shots.length)) {
+    addMsg('user', text, shots);
+    turnMark('start');
+    ws.send(JSON.stringify({ t: 'text', s: text }));
+    return;
+  }
+
   busy = true; chatAbort = new AbortController(); sync();
   addMsg('user', text, shots);
   turnMark('start');

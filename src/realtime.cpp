@@ -375,9 +375,13 @@ struct rt_session {
     // returns only once the LLM has stopped sampling and TTS has emitted its
     // last chunk. That is exactly why the socket is read on a separate
     // thread — response.cancel has to be able to arrive during this call.
-    void run_turn() {
+    // text == nullptr: answer the audio that has been streaming in. Otherwise
+    // answer these words instead, on the same socket and the same session, so
+    // a typed aside is part of the conversation rather than a separate
+    // transport that has to hand the callbacks back afterwards.
+    void run_turn(const std::string * text = nullptr) {
         const auto t_enter = std::chrono::steady_clock::now();
-        if (buf.empty() && pushed_samples == 0) {
+        if (!text && buf.empty() && pushed_samples == 0) {
             conn.send_error("invalid_request_error", "input_audio_buffer_commit_empty",
                             "no audio in the buffer to respond to");
             return;
@@ -414,9 +418,25 @@ struct rt_session {
 
         // Manual turn detection never saw a speech onset, so the turn opens
         // here and takes the whole encode at once — the old behaviour.
-        const double tail_s = (double) buf.size() / GL_MIC_RATE;
+        const double tail_s = text ? 0.0 : (double) buf.size() / GL_MIC_RATE;
         const auto t_enc0 = std::chrono::steady_clock::now();
-        if (!open_turn()) { active.store(false); return; }
+        if (text) {
+            // A text turn discards audio buffered behind it: those samples
+            // belong to a question that is no longer being asked.
+            discard_turn();
+            buf.clear();
+            vad.reset();
+            turn_lock = std::unique_lock<std::mutex>(g_turn_mu);
+            if (!vs.begin_turn(VoiceSession::turn_kind::text) || !vs.push_text(*text)) {
+                turn_lock.unlock();
+                active.store(false);
+                playing.store(false);
+                if (native) nev("err", {{"s", vs.last_error()}});
+                else conn.send_error("server_error", "session_error", vs.last_error());
+                return;
+            }
+            turn_open = true;
+        } else if (!open_turn()) { active.store(false); playing.store(false); return; }
         ms_encode = std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - t_enc0).count();
         const auto t_go = std::chrono::steady_clock::now();
@@ -462,7 +482,8 @@ struct rt_session {
                 fprintf(stderr, "  [encode %.0f ms of tail (%.1f s not yet fed)]\n",
                         ms_encode, tail_s);
             }
-            log_turn(was_cancelled ? "voice interrupted" : "voice", st, out_rate,
+            log_turn(text ? (was_cancelled ? "text interrupted" : "text")
+                          : (was_cancelled ? "voice interrupted" : "voice"), st, out_rate,
                      ms(t_enter, t_go), ms(t_enter, now),
                      first_audio_at.time_since_epoch().count()
                          ? ms(t_go, first_audio_at) : -1.0);
@@ -578,7 +599,7 @@ struct rt_session {
         handle_rest(ev, type, eid);
     }
 
-    // Four verbs. Everything the OpenAI surface expresses through
+    // Five verbs. Everything the OpenAI surface expresses through
     // session.update, input_audio_buffer.* and response.* that this actually
     // needs, without the parts that describe items and content parts nothing
     // here has.
@@ -590,6 +611,12 @@ struct rt_session {
         }
         if (t == "cancel") {
             if (active.load()) { cancelled.store(true); vs.abort_turn(); }
+            return;
+        }
+        if (t == "text") {                // a typed turn, spoken back
+            const std::string body = ev.value("s", "");
+            if (body.empty()) { nev("err", {{"s", "text: empty"}}); return; }
+            run_turn(&body);
             return;
         }
         if (t == "played") {
