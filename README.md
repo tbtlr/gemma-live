@@ -365,6 +365,50 @@ spoken   The sky is blue because of Rayleigh scattering, which is when the
 Typed answers use markdown and take the room they need; spoken ones stay to
 a sentence or two with nothing in them that cannot be read aloud.
 
+### The native protocol
+
+`/v1/realtime` speaks OpenAI's Realtime API, which is what lets an existing
+client drive this unchanged. `/v1/live` is the same session with a protocol
+built for it instead.
+
+Audio travels as **binary WebSocket frames**, raw pcm16, in both directions.
+No base64, no JSON envelope, no string allocated per 50 ms of speech. That
+is 1.00 bytes on the wire per byte of audio against 1.36, and it is the path
+that decides how soon a reply is heard.
+
+Control is JSON on the text opcode, with five events out —
+
+```
+{"t":"ready","in_rate":24000,"out_rate":24000,"vad_ms":500,"vision":true}
+{"t":"speech"}                        user started talking
+{"t":"eou"}                           and stopped; a reply is coming
+{"t":"start"}                         reply begins
+{"t":"txt","s":"..."}                 transcript, as it is spoken
+{"t":"end","cancelled":false,"text":"...","out_tok":8,"ttft_ms":91,"ms":300}
+```
+
+— against fourteen for the same turn on `/v1/realtime`, which wraps every
+fragment in event_id, response_id, item_id, output_index and content_index
+to describe items and content parts this has none of.
+
+Four verbs in:
+
+```
+{"t":"end"}      finish the turn now, do not wait for silence
+{"t":"cancel"}   stop the reply
+{"t":"played"}   the reply has finished coming out of the speakers
+{"t":"barge"}    that was the user talking over her, not her own echo
+```
+
+`played` is the one worth having. The server knows when it stopped
+*generating*, which is seconds before the client stops *playing* — and in
+that gap its turn detector is live and hears the reply through the
+microphone as though it were a user. Only the client knows when the audio
+actually ended. Until it says so the server will not open a turn on speech,
+and `barge` is how a client that means it overrides that. Audio keeps
+streaming throughout, so the interrupting words are already on the server
+when it does.
+
 ### Sharing it
 
 Both off by default, because on loopback neither earns its keep. Together

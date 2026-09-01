@@ -185,6 +185,16 @@ struct rt_conn {
     // rather than synthesising the rest of a reply nobody will hear.
     std::function<void()> on_dead;
 
+    void send_pcm(const void * data, size_t n) {
+        bool just_died = false;
+        {
+            std::lock_guard<std::mutex> lk(send_mu);
+            if (dead.load()) return;
+            if (!ws::send_binary(fd, data, n)) { dead.store(true); just_died = true; }
+        }
+        if (just_died && on_dead) on_dead();
+    }
+
     void send(const json & j) {
         const std::string s = j.dump();
         bool just_died = false;
@@ -246,6 +256,10 @@ struct rt_session {
     // continuously for as long as the socket is open, so packets say only that
     // a tab exists, which is exactly the case worth reclaiming.
     std::atomic<long long> last_speech_ms{0};
+    // True from the first byte of a reply until the client says it finished
+    // playing. Only the client can close that window; the server's own view
+    // ends when generation does, which is far too early.
+    std::atomic<bool> playing{false};
     std::atomic<bool> cancelled{false};
     std::string       resp_id, item_id;
     std::string       transcript;
@@ -334,6 +348,21 @@ struct rt_session {
         };
     }
 
+    // Which protocol this connection speaks. The OpenAI surface stays on
+    // /v1/realtime; /v1/live is ours. One session, two vocabularies — the
+    // turn machinery below does not know the difference.
+    bool native = false;
+
+    // Short keys and no envelope: a native event carries what it means and
+    // nothing else. The OpenAI events wrap every delta in event_id,
+    // response_id, item_id, output_index and content_index, which is five
+    // fields of bookkeeping per fragment of a reply nobody correlates.
+    void nev(const char * t, json extra = json::object()) {
+        json e = {{"t", t}};
+        for (auto & kv : extra.items()) e[kv.key()] = kv.value();
+        conn.send(e);
+    }
+
     void send_event(const char * type, json extra = json::object()) {
         json e = {{"event_id", new_id("event")}, {"type", type}};
         for (auto & kv : extra.items()) e[kv.key()] = kv.value();
@@ -365,7 +394,10 @@ struct rt_session {
         audio_samples_sent = 0;
         cancelled.store(false);
         active.store(true);
+        playing.store(true);
 
+        if (native) nev("start");
+        else {
         send_event("response.created", {{"response",
             {{"id", resp_id}, {"object", "realtime.response"},
              {"status", "in_progress"}, {"output", json::array()}}}});
@@ -378,6 +410,7 @@ struct rt_session {
             {"response_id", resp_id}, {"item_id", item_id},
             {"output_index", 0}, {"content_index", 0},
             {"part", {{"type", "audio"}, {"transcript", ""}}}});
+        }
 
         // Manual turn detection never saw a speech onset, so the turn opens
         // here and takes the whole encode at once — the old behaviour.
@@ -396,6 +429,7 @@ struct rt_session {
         active.store(false);
 
         const bool was_cancelled = cancelled.load();
+        if (!native) {
         if (!was_cancelled) {
             send_event("response.output_audio.done", {
                 {"response_id", resp_id}, {"item_id", item_id},
@@ -416,6 +450,7 @@ struct rt_session {
                       {"role", "assistant"},
                       {"content", json::array({json{{"type", "audio"},
                                                     {"transcript", transcript}}})}}}});
+        }
 
         const TurnStats & st = vs.last_stats();
         if (O.verbosity > 0) {
@@ -431,6 +466,18 @@ struct rt_session {
                      ms(t_enter, t_go), ms(t_enter, now),
                      first_audio_at.time_since_epoch().count()
                          ? ms(t_go, first_audio_at) : -1.0);
+        }
+        if (native) {
+            // One event, with the numbers the client would otherwise have to
+            // time for itself. Cancelled says whether it was interrupted, so
+            // there is no status string to parse.
+            nev("end", {{"cancelled", was_cancelled},
+                        {"text",   transcript},
+                        {"in_tok", st.n_audio_tokens},
+                        {"out_tok", st.n_llm_tokens},
+                        {"ttft_ms", (int) (st.ms_ttft + 0.5)},
+                        {"ms",     (int) (st.ms_llm_gen + 0.5)}});
+            return;
         }
         send_event("response.done", {{"response",
             {{"id", resp_id}, {"object", "realtime.response"},
@@ -448,6 +495,7 @@ struct rt_session {
     // ── model callbacks ─────────────────────────────────────────────────
     void on_token(const char * text) {
         transcript += text;
+        if (native) { nev("txt", {{"s", text}}); return; }
         send_event("response.output_audio_transcript.delta", {
             {"response_id", resp_id}, {"item_id", item_id},
             {"output_index", 0}, {"content_index", 0},
@@ -469,6 +517,10 @@ struct rt_session {
         std::vector<uint8_t> bytes;
         float_to_pcm16(rs.data(), rs.size(), bytes);
         audio_samples_sent += rs.size();
+        // Straight out as bytes. The base64 below costs a third more on the
+        // wire and an allocation per chunk, on the path that decides how soon
+        // the reply is heard.
+        if (native) { conn.send_pcm(bytes.data(), bytes.size()); return; }
         send_event("response.output_audio.delta", {
             {"response_id", resp_id}, {"item_id", item_id},
             {"output_index", 0}, {"content_index", 0},
@@ -477,6 +529,7 @@ struct rt_session {
 
     // ── inbound events ──────────────────────────────────────────────────
     void handle(const json & ev) {
+        if (native && ev.contains("t")) { handle_native(ev); return; }
         const std::string type = ev.value("type", "");
         const std::string eid  = ev.value("event_id", "");
 
@@ -518,8 +571,50 @@ struct rt_session {
                                 "audio must be base64-encoded pcm16", eid);
                 return;
             }
+            push_pcm(bytes.data(), bytes.size());
+            return;
+        }
+
+        handle_rest(ev, type, eid);
+    }
+
+    // Four verbs. Everything the OpenAI surface expresses through
+    // session.update, input_audio_buffer.* and response.* that this actually
+    // needs, without the parts that describe items and content parts nothing
+    // here has.
+    void handle_native(const json & ev) {
+        const std::string t = ev.value("t", "");
+        if (t == "end") {                 // force end of turn
+            if (turn_open || !buf.empty()) { commit(); run_turn(); }
+            return;
+        }
+        if (t == "cancel") {
+            if (active.load()) { cancelled.store(true); vs.abort_turn(); }
+            return;
+        }
+        if (t == "played") {
+            // The client is the only party that knows when the reply stopped
+            // being audible: the server finished generating seconds earlier.
+            // Without this the turn detector re-arms while she is still
+            // talking and hears her as a user.
+            playing.store(false);
+            return;
+        }
+        if (t == "barge") {               // heard the user over the reply
+            playing.store(false);
+            if (active.load()) { cancelled.store(true); vs.abort_turn(); }
+            return;
+        }
+        nev("err", {{"s", "unknown command: " + t}});
+    }
+
+    // Input audio, however it arrived. A native client hands us the bytes
+    // from a binary frame; an OpenAI one hands us the same bytes after a
+    // base64 decode. Everything past this point is identical, which is the
+    // point — there is one turn machine, not two.
+    void push_pcm(const uint8_t * data, size_t n) {
             std::vector<float> f, rs;
-            pcm16_to_float(bytes, f);
+            pcm16_to_float(std::vector<uint8_t>(data, data + n), f);
             resample_linear(f, in_rate, GL_MIC_RATE, rs);
             buf.insert(buf.end(), rs.begin(), rs.end());
 
@@ -556,7 +651,8 @@ struct rt_session {
                     fprintf(stderr, "  [turn capped at %zu s of audio]\n",
                             MAX_TURN_SAMPLES / (size_t) GL_MIC_RATE);
                 }
-                send_event("input_audio_buffer.speech_stopped", {
+                if (native) nev("eou", {{"capped", true}});
+                else send_event("input_audio_buffer.speech_stopped", {
                     {"audio_end_ms", (int) (pushed_samples * 1000 / GL_MIC_RATE)},
                     {"item_id", new_id("item")}});
                 vad.reset();
@@ -567,15 +663,24 @@ struct rt_session {
             if (server_vad && !active.load()) {
                 switch (vad.feed(rs.data(), rs.size())) {
                     case gl_vad::eou::event::speech_started:
+                        // Still audible: this is almost certainly her own
+                        // voice coming back, and opening a turn on it is how
+                        // she ends up answering herself. A client that means
+                        // it sends "barge", which clears this and cancels the
+                        // reply — and because audio never stopped streaming,
+                        // the interrupting words are already here.
+                        if (native && playing.load()) break;
                         last_speech_ms.store(now_ms());
-                        send_event("input_audio_buffer.speech_started", {
+                        if (native) nev("speech");
+                        else send_event("input_audio_buffer.speech_started", {
                             {"audio_start_ms", (int) (vad.onset_sample * 1000 / GL_MIC_RATE)},
                             {"item_id", new_id("item")}});
                         // Start encoding now, while they are still speaking.
                         open_turn();
                         break;
                     case gl_vad::eou::event::speech_stopped: {
-                        send_event("input_audio_buffer.speech_stopped", {
+                        if (native) nev("eou");
+                        else send_event("input_audio_buffer.speech_stopped", {
                             {"audio_end_ms", (int) (vad.samples_total * 1000 / GL_MIC_RATE)},
                             {"item_id", new_id("item")}});
                         commit();
@@ -586,8 +691,9 @@ struct rt_session {
                 }
             }
             return;
-        }
+    }
 
+    void handle_rest(const json & ev, const std::string & type, const std::string & eid) {
         if (type == "input_audio_buffer.commit")  { commit(); return; }
 
         if (type == "input_audio_buffer.clear") {
@@ -629,6 +735,9 @@ struct rt_session {
                             "buffer is empty");
             return;
         }
+        // Native mode already said "eou"; committed and item.created describe
+        // a conversation-item model it does not have.
+        if (native) { vad.reset(); return; }
         const std::string id = new_id("item");
         send_event("input_audio_buffer.committed", {{"item_id", id}});
         send_event("conversation.item.created", {
@@ -640,13 +749,21 @@ struct rt_session {
 };
 
 // ── event queue between the reader thread and the session thread ────────
+// One item off the socket: either a control event or a block of audio. Audio
+// travels as bytes rather than being wrapped in json, so the native path
+// never builds a string for the thing it sends twenty times a second.
+struct msg {
+    json                 ev;
+    std::string          pcm;   // non-empty => raw pcm16 from a binary frame
+};
+
 struct evq {
     std::mutex              m;
     std::condition_variable cv;
-    std::deque<json>        q;
+    std::deque<msg>         q;
     bool                    closed = false;
 
-    void push(json j) {
+    void push(msg j) {
         { std::lock_guard<std::mutex> lk(m); q.push_back(std::move(j)); }
         cv.notify_one();
     }
@@ -654,7 +771,7 @@ struct evq {
         { std::lock_guard<std::mutex> lk(m); closed = true; }
         cv.notify_all();
     }
-    bool pop(json * out) {
+    bool pop(msg * out) {
         std::unique_lock<std::mutex> lk(m);
         cv.wait(lk, [&] { return closed || !q.empty(); });
         if (q.empty()) return false;
@@ -665,11 +782,12 @@ struct evq {
 };
 
 // Serve one client to completion.
-static void serve_client(int fd, VoiceSession & vs, const gl_opts & O) {
+static void serve_client(int fd, VoiceSession & vs, const gl_opts & O, bool native) {
     rt_conn conn;
     conn.fd = fd;
 
     rt_session S(conn, vs, O);
+    S.native = native;
     S.in_rate = S.out_rate = 24000;
     S.vad.sample_rate = GL_MIC_RATE;
     S.vad.silence_ms  = O.vad_silence;
@@ -694,7 +812,19 @@ static void serve_client(int fd, VoiceSession & vs, const gl_opts & O) {
     }
 
     S.last_speech_ms.store(now_ms());
-    S.send_event("session.created", {{"session", S.session_object()}});
+    if (S.native) {
+        // Everything a client needs to start, in one message: the rates it
+        // must speak, whether images are accepted, and how long a silence
+        // ends a turn. The OpenAI surface makes a client discover the first
+        // by assumption and the second from a separate HTTP endpoint.
+        S.nev("ready", {{"in_rate",  S.in_rate},
+                        {"out_rate", S.out_rate},
+                        {"vad_ms",   O.vad_silence},
+                        {"max_turn_s", (int) (rt_session::MAX_TURN_SAMPLES / GL_MIC_RATE)},
+                        {"vision",   O.llm_vision}});
+    } else {
+        S.send_event("session.created", {{"session", S.session_object()}});
+    }
 
     // How often the reader wakes with nothing to read. That tick is also when
     // the idle check runs, so it has to be well under the idle window — at the
@@ -722,7 +852,16 @@ static void serve_client(int fd, VoiceSession & vs, const gl_opts & O) {
                 }
                 continue;
             }
-            if (o != ws::op::text) continue;          // audio rides inside JSON
+            // Native audio: straight from the frame to the encoder. No JSON
+            // to parse, no base64 to decode, no string to allocate — at 20
+            // frames a second in a latency-critical path, that is the whole
+            // reason this protocol exists.
+            if (o == ws::op::binary) {
+                if (!S.native) continue;             // OpenAI mode has no binary input
+                q.push(msg{{}, std::move(payload)});
+                continue;
+            }
+            if (o != ws::op::text) continue;
 
             json ev;
             try {
@@ -747,17 +886,21 @@ static void serve_client(int fd, VoiceSession & vs, const gl_opts & O) {
                 vs.abort_turn();
                 continue;
             }
-            q.push(std::move(ev));
+            q.push(msg{std::move(ev), {}});
         }
         conn.dead.store(true);
         if (S.active.load()) { S.cancelled.store(true); vs.abort_turn(); }
         q.close();
     });
 
-    json ev;
-    while (q.pop(&ev)) {
+    msg m;
+    while (q.pop(&m)) {
         if (conn.dead.load()) break;
-        S.handle(ev);
+        if (!m.pcm.empty()) {
+            S.push_pcm((const uint8_t *) m.pcm.data(), m.pcm.size());
+            continue;
+        }
+        S.handle(m.ev);
     }
 
     conn.dead.store(true);
@@ -1364,8 +1507,9 @@ int main(int argc, char ** argv) {
         if (worker.joinable()) worker.join();   // previous one has already finished
         busy.store(true);
         if (O.verbosity > 0) fprintf(stderr, "  [client connected %s]\n", req.path.c_str());
-        worker = std::thread([fd, &vs, &O, &busy] {
-            serve_client(fd, *vs, O);
+        const bool native = (req.path == "/v1/live");
+        worker = std::thread([fd, &vs, &O, &busy, native] {
+            serve_client(fd, *vs, O, native);
             close(fd);
             busy.store(false);
             if (O.verbosity > 0) fprintf(stderr, "  [client disconnected]\n");

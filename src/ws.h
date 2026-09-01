@@ -143,6 +143,12 @@ inline bool send_text(int fd, const std::string & s) {
     return send_frame(fd, op::text, s.data(), s.size());
 }
 
+// Audio goes out as a binary frame rather than base64 inside JSON: a third
+// less on the wire, and no string to allocate or parse per 50 ms of speech.
+inline bool send_binary(int fd, const void * data, size_t n) {
+    return send_frame(fd, op::binary, data, n);
+}
+
 inline void send_close(int fd, uint16_t code, const std::string & reason) {
     std::string p;
     p += (char) (code >> 8);
