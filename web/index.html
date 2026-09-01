@@ -1050,10 +1050,13 @@ function stopAudio() {
 function speechEnded() {
   // Idempotent: stopAudio() empties `sources` and every stopped node still
   // fires onended afterwards, so this is reached more than once per reply.
-  // Without the guard the late call would clear the buffer a second time —
-  // after a barge-in has already replayed the user's opening words into it.
   if (!gated) return;
   gated = false;
+  // The server stopped generating seconds ago; only this side knows the
+  // sound has actually stopped. Until it hears this it will not open a turn
+  // on speech, so the reply cannot be heard as a user. Below the guard, so
+  // it is said once per reply rather than once per audio node.
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify({ t: 'played' }));
   httpSpeaking = false;
   outRecent = []; loudRun = 0;
   const r = echoReport();
@@ -1171,9 +1174,25 @@ function outRms() {
   outAn.getFloatTimeDomainData(d);
   return rms(d);
 }
+// pcm16 straight onto the socket. toB64 stays for /api/transcribe, which is
+// an ordinary HTTP body and has nowhere else to put bytes.
+function toPcm16(f32) {
+  const p = new Int16Array(f32.length);
+  for (let i = 0; i < f32.length; i++) {
+    const v = Math.max(-1, Math.min(1, f32[i]));
+    p[i] = v < 0 ? v * 0x8000 : v * 0x7fff;
+  }
+  return p.buffer;
+}
+function pcm16ToFloat(ab) {
+  const p = new Int16Array(ab), f = new Float32Array(p.length);
+  for (let i = 0; i < p.length; i++) f[i] = p[i] / (p[i] < 0 ? 0x8000 : 0x7fff);
+  return f;
+}
+
 function sendChunk(f32) {
   turnAudio.push(f32.slice());
-  ws.send(JSON.stringify({ type: 'input_audio_buffer.append', audio: toB64(f32) }));
+  ws.send(toPcm16(f32));
 }
 
 // The button form of a barge-in. Same three things have to happen — tell
@@ -1182,7 +1201,7 @@ function sendChunk(f32) {
 // speech.
 function stopReply() {
   if (wsResponding && ws && ws.readyState === 1) {
-    ws.send(JSON.stringify({ type: 'response.cancel' }));
+    ws.send(JSON.stringify({ t: 'cancel' }));
   }
   // Dropping the SSE connection is what tells the server to abandon a typed
   // reply; there is no cancel message on that path.
@@ -1224,7 +1243,10 @@ function onChunk(f32) {
         // response for the socket to cancel — asking anyway earns a spurious
         // "no active response" error. Stopping playback is the part that
         // matters either way.
-        if (wsResponding) ws.send(JSON.stringify({ type: 'response.cancel' }));
+        // "barge" is both the cancel and the permission to open a turn on
+        // what is being said over her — the server holds that back until the
+        // client says the reply is no longer audible.
+        ws.send(JSON.stringify({ t: 'barge' }));
         stopAudio();
         endVoiceReply(true);
         loudRun = 0;
@@ -1286,7 +1308,9 @@ async function showSpokenTurn() {
 
 function connectWs() {
   const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
-  ws = new WebSocket(proto + location.host + url('/v1/realtime'));
+  ws = new WebSocket(proto + location.host + url('/v1/live'));
+  // Reply audio arrives as bytes, not as base64 inside an event.
+  ws.binaryType = 'arraybuffer';
   ws.onopen  = () => {
     $('#vstate').textContent = '';                        // clears a previous failure
     // Both halves are in place now: the microphone was granted before this
@@ -1300,45 +1324,49 @@ function connectWs() {
     if (voiceOn) $('#vstate').textContent = 'disconnected';
   };
   ws.onmessage = ev => {
+    if (ev.data instanceof ArrayBuffer) {          // reply audio
+      turnMark('audio');
+      enqueue(pcm16ToFloat(ev.data));
+      return;
+    }
     const m = JSON.parse(ev.data);
-    switch (m.type) {
-      // Deliberately NOT sharing a body with speech_stopped. These two once
-      // both did nothing and were folded together; when the turn handling
-      // was added to what looked like the stopped case, started inherited
-      // it — and since started fires about 800ms into an utterance, it took
-      // the opening words away into their own bubble and left the rest to
-      // arrive without them.
-      case 'input_audio_buffer.speech_started':
+    switch (m.t) {
+      case 'ready':
+        // The server states its own rates rather than us assuming them.
+        if (m.out_rate && m.out_rate !== RATE) {
+          notify('server speaks ' + m.out_rate + ' Hz, this page speaks ' + RATE);
+        }
+        break;
+      // Deliberately NOT sharing a body with eou. These two once both did
+      // nothing and were folded together; when the turn handling was added to
+      // what looked like the stopped case, started inherited it — and since
+      // it fires about 800 ms into an utterance, it took the opening words
+      // away into their own bubble.
+      case 'speech':
         break;                             // the ribbon already shows this
-      case 'input_audio_buffer.speech_stopped':
+      case 'eou':
         turnMark('start');                 // the user is waiting from here
         showSpokenTurn();
         break;
-      case 'response.created':
+      case 'start':
         wsResponding = true;
         refreshBusy();
-        if (!turnT0) turnMark('start');    // manual turn_detection: no speech_stopped
+        if (!turnT0) turnMark('start');
         liveBot = addMsg('bot', '');
         liveBot.querySelector('.body').classList.add('cursor');
         break;
-      case 'response.output_audio_transcript.delta':
+      case 'txt':
         turnMark('tok');
-        if (liveBot) liveBot.querySelector('.body').textContent += m.delta;
+        if (liveBot) liveBot.querySelector('.body').textContent += m.s;
         break;
-      case 'response.output_audio.delta':
-        turnMark('audio');
-        enqueue(fromB64(m.delta)); break;
-      case 'response.done':
+      case 'end':
         wsResponding = false;
         refreshBusy();
         turnReport('voice');
-        endVoiceReply(false);
+        endVoiceReply(!!m.cancelled);
         break;
-      case 'error':
-        // Empty-buffer errors are routine chatter in a quiet room.
-        if (m.error && m.error.code !== 'input_audio_buffer_commit_empty') {
-          $('#vstate').textContent = m.error.message || m.error.code;
-        }
+      case 'err':
+        $('#vstate').textContent = m.s || 'server error';
         break;
     }
   };

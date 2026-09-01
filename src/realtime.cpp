@@ -593,6 +593,7 @@ struct rt_session {
             return;
         }
         if (t == "played") {
+            vad.reset();          // whatever it half-heard through the reply
             // The client is the only party that knows when the reply stopped
             // being audible: the server finished generating seconds earlier.
             // Without this the turn detector re-arms while she is still
@@ -602,6 +603,7 @@ struct rt_session {
         }
         if (t == "barge") {               // heard the user over the reply
             playing.store(false);
+            vad.reset();
             if (active.load()) { cancelled.store(true); vs.abort_turn(); }
             return;
         }
@@ -660,16 +662,16 @@ struct rt_session {
                 return;
             }
 
+            // Deaf while the reply is still audible. Not just to the onset:
+            // gating that alone still left speech_stopped to fire and run a
+            // turn on her own voice, which is the same bug wearing a hat.
+            // The client says "played" when the sound has actually stopped,
+            // or "barge" if that really was someone talking over her.
+            if (native && playing.load()) return;
+
             if (server_vad && !active.load()) {
                 switch (vad.feed(rs.data(), rs.size())) {
                     case gl_vad::eou::event::speech_started:
-                        // Still audible: this is almost certainly her own
-                        // voice coming back, and opening a turn on it is how
-                        // she ends up answering herself. A client that means
-                        // it sends "barge", which clears this and cancels the
-                        // reply — and because audio never stopped streaming,
-                        // the interrupting words are already here.
-                        if (native && playing.load()) break;
                         last_speech_ms.store(now_ms());
                         if (native) nev("speech");
                         else send_event("input_audio_buffer.speech_started", {
