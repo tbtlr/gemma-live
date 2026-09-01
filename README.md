@@ -667,6 +667,29 @@ it and the reply does not.
 
 ## Development
 
+Three unit tests cover the pure logic — backchannel triggers, barge-in and
+transcript assembly — and run with the build:
+
+```bash
+cd build && ctest
+```
+
+Neither wire protocol is reachable from those: they never open a socket, so
+nothing notices when an event stops being emitted or an audio frame changes
+shape. `/v1/realtime` especially, since every change lands on `/v1/live`
+first and a compatibility surface nobody exercises is one that quietly stops
+being compatible. So:
+
+```bash
+./build/gl-serve &
+tools/protocol-test.py                     # or --port / --token
+```
+
+It synthesises its own audio, so there are no fixtures — but it needs the
+models loaded, which is why it is not a ctest target. It asserts the event
+sequence on both protocols, that reply audio is base64 on one and binary
+frames on the other, that neither leaks the other's vocabulary, and that the
+played gate, barge, and typed turns behave.
 ```bash
 cmake --build build --target gemma-live gl-offline gl-serve barge-test transcript-test nod-test
 cd build && ctest
