@@ -168,6 +168,33 @@ def test_live(host, port, token):
     ok("barge lets an interruption through", "end" in types(barged))
     s.text({"t": "played"}); time.sleep(0.3)
 
+    # cancel must leave the client able to be heard again. A client that
+    # cancels then correctly plays nothing has no `played` to send, so if
+    # cancel did not open the gate it would be deaf from here on.
+    print("  -- cancel opens the gate --")
+    t0 = say(s, 2.0, t0)
+    s.collect(30, until="start")
+    s.text({"t": "cancel"})
+    s.collect(30, until="end")
+    t0 = say(s, 4.0, t0)                       # deliberately no `played`
+    cev, _ = s.collect(45, until="end")
+    ok("a turn opens after cancel without played", "end" in types(cev))
+    s.text({"t": "played"}); time.sleep(0.3)
+
+    # The gate is the client's to open, but on a deadline. A client that
+    # never sends `played` must not be able to wedge the session deaf.
+    print("  -- the played deadline --")
+    t0 = say(s, 4.0, t0)
+    dev, dbytes = s.collect(45, until="end")
+    ok("a reply to hold the gate open", "end" in types(dev), f"{dbytes} bytes")
+    played_s = dbytes / 2 / RATE               # pcm16 -> seconds
+    time.sleep(played_s + 6.0)                 # past duration + PLAY_GRACE_MS
+    t0 = say(s, 4.0, t0)
+    lev, _ = s.collect(45, until="end")
+    ok("the server listens again if played never arrives", "end" in types(lev),
+       f"reply was {played_s:.1f}s")
+    s.text({"t": "played"}); time.sleep(0.3)
+
     # typed turns on the same socket.
     print("  -- the text verb --")
     s.text({"t": "text", "s": "Say hello in three words."})

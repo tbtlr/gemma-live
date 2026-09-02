@@ -243,9 +243,21 @@ struct rt_session {
     // a tab exists, which is exactly the case worth reclaiming.
     std::atomic<long long> last_speech_ms{0};
     // True from the first byte of a reply until the client says it finished
-    // playing. Only the client can close that window; the server's own view
-    // ends when generation does, which is far too early.
-    std::atomic<bool> playing{false};
+    // playing. The client owns the end of that window, because the server's
+    // own view of it ends when generation does — far too early.
+    //
+    // But it owns it on a deadline. `playing` gates the whole audio path, so
+    // a client that never says `played` — crashed, buggy, or simply not
+    // playing what it asked for — leaves the session alive and permanently
+    // deaf, holding the one session slot with nothing able to reclaim it
+    // (--web-idle is off by default). play_until_ms is the reply's own
+    // duration plus a wide margin: a client that is merely slow is never cut
+    // off ahead of its own audio, and a broken one cannot wedge the session.
+    // Zero means no deadline is armed.
+    std::atomic<bool>      playing{false};
+    std::atomic<long long> play_until_ms{0};
+    // Written on the TTS thread, read on the session thread at turn end.
+    std::atomic<uint64_t>  audio_samples_sent{0};
     std::atomic<bool> cancelled{false};
     std::string       transcript;
 
@@ -304,6 +316,11 @@ struct rt_session {
     // 28 s instead, which answers what was said rather than losing it.
     static constexpr size_t MAX_TURN_SAMPLES = 28 * (size_t) GL_MIC_RATE;
 
+    // Slack on top of the reply's duration before the server stops waiting to
+    // be told playback ended. Wide on purpose: it is a backstop against a
+    // client that will never answer, not a timing constraint on one that will.
+    static constexpr long long PLAY_GRACE_MS = 5000;
+
     // ── outbound ────────────────────────────────────────────────────────
     // Short keys and no envelope: an event carries what it means and nothing
     // else. Nothing here wraps a delta in event_id, response_id, item_id,
@@ -340,6 +357,8 @@ struct rt_session {
         cancelled.store(false);
         active.store(true);
         playing.store(true);
+        play_until_ms.store(0);
+        audio_samples_sent.store(0);
 
         nev("start");
 
@@ -401,6 +420,19 @@ struct rt_session {
                     {"out_tok", st.n_llm_tokens},
                     {"ttft_ms", (int) (st.ms_ttft + 0.5)},
                     {"ms",      (int) (st.ms_llm_gen + 0.5)}});
+
+        // A turn that emitted nothing — errored, or cancelled before TTS
+        // produced a sample — leaves a correct client with no playback whose
+        // end it could honestly report. Waiting for `played` there asks it to
+        // lie, and a client that refuses is one that hangs. Open the gate
+        // here instead, and hold the client to a deadline otherwise.
+        const uint64_t sent = audio_samples_sent.load();
+        if (sent == 0) {
+            playing.store(false);
+        } else {
+            play_until_ms.store(now_ms()
+                + (long long) (sent * 1000 / (uint64_t) out_rate) + PLAY_GRACE_MS);
+        }
     }
 
     // ── model callbacks ─────────────────────────────────────────────────
@@ -423,6 +455,7 @@ struct rt_session {
         resample_linear(src, vs.tts_sample_rate(), out_rate, rs);
         std::vector<uint8_t> bytes;
         float_to_pcm16(rs.data(), rs.size(), bytes);
+        audio_samples_sent.fetch_add(rs.size());
         // Straight out as bytes: base64 would cost a third more on the wire
         // and an allocation per chunk, on the path that decides how soon the
         // reply is heard.
@@ -431,11 +464,19 @@ struct rt_session {
 
     // ── inbound events ──────────────────────────────────────────────────
 
-    // Stop the reply in flight, once. The reader thread calls this the
-    // moment the frame lands — an interrupt that queues behind the audio it
-    // is meant to stop arrives too late — and handle() calls it again for
-    // the same event, which must therefore be harmless.
+    // Stop the reply in flight, once, and stop waiting to hear that it
+    // finished playing — a client told to stop has nothing left to play, so
+    // holding the gate shut would only leave it deaf. cancel and barge differ
+    // in what they mean, not in what the server must do about them.
+    //
+    // The reader thread calls this the moment the frame lands — an interrupt
+    // that queues behind the audio it is meant to stop arrives too late — and
+    // handle() calls it again for the same event, which must therefore be
+    // harmless. Atomics only, for that reason: the VAD belongs to the session
+    // thread, so resetting it happens in handle() and not here.
     void interrupt() {
+        playing.store(false);
+        play_until_ms.store(0);
         if (active.load() && !cancelled.exchange(true)) vs.abort_turn();
     }
 
@@ -447,7 +488,7 @@ struct rt_session {
             if (turn_open || !buf.empty()) { commit(); run_turn(); }
             return;
         }
-        if (t == "cancel") { interrupt(); return; }
+        if (t == "cancel") { vad.reset(); interrupt(); return; }
         if (t == "text") {                // a typed turn, spoken back
             const std::string body = ev.value("s", "");
             if (body.empty()) { conn.send_err("text: empty"); return; }
@@ -455,6 +496,7 @@ struct rt_session {
             return;
         }
         if (t == "played") {
+            play_until_ms.store(0);
             vad.reset();          // whatever it half-heard through the reply
             // The client is the only party that knows when the reply stopped
             // being audible: the server finished generating seconds earlier.
@@ -464,7 +506,6 @@ struct rt_session {
             return;
         }
         if (t == "barge") {               // heard the user over the reply
-            playing.store(false);
             vad.reset();
             interrupt();
             return;
@@ -518,7 +559,22 @@ struct rt_session {
         // turn on her own voice, which is the same bug wearing a hat.
         // The client says "played" when the sound has actually stopped,
         // or "barge" if that really was someone talking over her.
-        if (playing.load()) return;
+        //
+        // Checked here rather than on a timer because here is where it
+        // matters: a client that has stopped sending audio is not one the
+        // gate can hurt. The deadline is the backstop for a client that
+        // keeps talking to a server that has stopped listening.
+        if (playing.load()) {
+            const long long until = play_until_ms.load();
+            if (until == 0 || now_ms() <= until) return;
+            if (O.verbosity > 0) {
+                fprintf(stderr, "  [no 'played' within %lld ms of the reply ending;"
+                                " listening again]\n", PLAY_GRACE_MS);
+            }
+            playing.store(false);
+            play_until_ms.store(0);
+            vad.reset();          // whatever it half-heard through the reply
+        }
 
         if (!active.load()) {
             switch (vad.feed(rs.data(), rs.size())) {
@@ -549,7 +605,6 @@ struct rt_session {
             conn.send_err("buffer is empty");
             return;
         }
-        vad.reset();
         vad.reset();
     }
 };
@@ -1321,7 +1376,40 @@ int main(int argc, char ** argv) {
     std::thread       worker;
     for (;;) {
         const int fd = ::accept(lfd, nullptr, nullptr);
-        if (fd < 0) { if (errno == EINTR) continue; break; }
+        if (fd < 0) {
+            // Most accept() failures are transient and say nothing about the
+            // listening socket: a peer that resets before we accept gives
+            // ECONNABORTED, a descriptor or memory squeeze gives EMFILE /
+            // ENFILE / ENOMEM / ENOBUFS. Treating any of them as fatal made
+            // the server exit with status 0 and no message, which looks
+            // exactly like a clean shutdown and is impossible to diagnose
+            // after the fact.
+            switch (errno) {
+                case EINTR:
+                    continue;
+                case ECONNABORTED:
+                case EMFILE:
+                case ENFILE:
+                case ENOMEM:
+                case ENOBUFS:
+                case EPERM:
+                    if (O.verbosity > 0) {
+                        fprintf(stderr, "  [accept: %s — continuing]\n",
+                                strerror(errno));
+                    }
+                    // Out of descriptors or memory: back off briefly rather
+                    // than spinning the CPU retrying at full speed.
+                    if (errno != ECONNABORTED && errno != EPERM) usleep(100000);
+                    continue;
+                default:
+                    // Genuinely fatal (EBADF, EINVAL, ENOTSOCK): say so
+                    // instead of returning 0 as though nothing happened.
+                    fprintf(stderr, "ERR: accept failed: %s (errno %d)\n",
+                            strerror(errno), errno);
+                    break;
+            }
+            break;
+        }
 
         ws::request req;
         std::string herr;

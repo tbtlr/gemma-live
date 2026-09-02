@@ -317,6 +317,18 @@ stateless by definition and would invite exactly that.
 Chrome and Safari treat `http://localhost` as a secure context, so the
 microphone works without TLS. Reaching it from another machine needs HTTPS.
 
+Whatever terminates that TLS must not put an idle read timeout on
+`/api/live`. A live session is legitimately silent server-to-client for as
+long as nobody is speaking, so a proxy that reaps quiet connections cuts
+sessions mid-conversation. If the client then reconnects automatically the
+symptom does not look like a dropped socket at all: every reconnect is a
+fresh session with an empty KV cache, answering whatever fragment of
+microphone audio arrives first, so the model appears to be spontaneously
+volunteering "is there anything else I can help you with?". The same applies
+to a client's own socket timeout — Python's
+`socket.create_connection(timeout=…)` leaves that timeout on the socket for
+every later `recv`, which fails in exactly this way.
+
 ### Two prompts
 
 `gemma-live` is voice-only and `prompts/voice.txt` says so on every line —
@@ -365,7 +377,7 @@ cost, on the path that decides how soon a reply is heard.
 Control is JSON on the text opcode, with five events out —
 
 ```
-{"t":"ready","in_rate":24000,"out_rate":24000,"vad_ms":500,"vision":true}
+{"t":"ready","in_rate":24000,"out_rate":24000,"vad_ms":500,"max_turn_s":28,"vision":true}
 {"t":"speech"}                        user started talking
 {"t":"eou"}                           and stopped; a reply is coming
 {"t":"start"}                         reply begins
@@ -387,6 +399,23 @@ Five verbs in:
 {"t":"played"}         the reply has finished coming out of the speakers
 {"t":"barge"}          that was the user talking over her, not her own echo
 ```
+
+`played` is load-bearing, not politeness. The whole audio path is gated on
+it: from the first byte of a reply the server stops feeding the VAD, because
+otherwise it hears Gemma through the microphone and answers her. Only the
+client knows when the sound actually stopped — the server finished generating
+seconds earlier.
+
+So the client owns that window, but on a deadline. If no `played` or `barge`
+arrives within the reply's own duration plus five seconds, the server opens
+the gate itself and says so at `--verbosity 1`. A client that is merely slow
+is never cut off ahead of its own audio; a client that crashed, or never
+played anything, can no longer leave the session deaf and holding the one
+session slot. Two cases never need `played` at all: a turn that emitted no
+audio (errored, or cancelled before the first sample) opens the gate when it
+ends, since there is no playback whose end could honestly be reported, and
+`cancel` opens it the same way `barge` does — a client told to stop has
+nothing left to play.
 
 `text` is why the web UI no longer opens a second transport onto the same
 conversation: in voice mode a typed aside goes down the socket that is
