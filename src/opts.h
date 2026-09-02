@@ -87,7 +87,7 @@ struct gl_opts {
     std::string stt_model   = "models/parakeet-tdt-0.6b-v3-q4_k.gguf";
     int         stt_threads = 2;
 
-    // rt — Realtime API server (gl-serve only)
+    // web — web server (gl-serve only)
     // Shared secret. Empty (the default) means no check at all, which is
     // right on loopback and wrong the moment this is behind a tunnel.
     std::string web_token;

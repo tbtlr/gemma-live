@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
-"""End-to-end check of both wire protocols against a running gl-serve.
+"""End-to-end check of the /v1/live wire protocol against a running gl-serve.
 
 The unit tests under tests/ are pure logic and never open a socket, so
-nothing else notices when an event stops being emitted or an audio frame
-changes shape. /v1/realtime especially: every change lands on /v1/live
-first, and a compatibility surface nobody exercises is one that quietly
-stops being compatible.
+nothing else notices when an event stops being emitted, an audio frame
+changes shape, or a turn stops ending.
 
     ./build/gl-serve &
     tools/protocol-test.py                    # default port 8927
@@ -111,55 +109,23 @@ def speech(seconds, t0):
 
 SILENCE = b"\x00" * (FRAME * 2)
 
-def say(sock, seconds, t0, native):
+def say(sock, seconds, t0):
     """A whole utterance: speech, then enough silence to end the turn."""
     sent = 0.0
     while sent < seconds:
-        pcm = speech(0.05, t0 + sent)
-        sock.binary(pcm) if native else sock.text(
-            {"type": "input_audio_buffer.append",
-             "audio": base64.b64encode(pcm).decode()})
+        sock.binary(speech(0.05, t0 + sent))
         sent += 0.05
         time.sleep(0.004)
     for _ in range(30):
-        sock.binary(SILENCE) if native else sock.text(
-            {"type": "input_audio_buffer.append",
-             "audio": base64.b64encode(SILENCE).decode()})
+        sock.binary(SILENCE)
         time.sleep(0.004)
     return t0 + sent
 
 def types(evs):
-    return [e.get("t") or e.get("type") for e in evs]
+    return [e.get("t") for e in evs]
 
-def test_openai(host, port, token):
-    print("\n/v1/realtime — the OpenAI surface")
-    s = Sock(host, port, "/v1/realtime", token)
-    ok("handshake upgrades", "101" in s.status, s.status)
-    hello, _ = s.collect(3)
-    ok("greets with session.created", "session.created" in types(hello))
-
-    say(s, 4.0, 0.0, native=False)
-    evs, bin_audio = s.collect(45, until="response.done")
-    t = types(evs)
-    for want in ("input_audio_buffer.speech_started",
-                 "input_audio_buffer.speech_stopped",
-                 "input_audio_buffer.committed",
-                 "response.created",
-                 "response.output_audio_transcript.delta",
-                 "response.output_audio.delta",
-                 "response.done"):
-        ok(f"emits {want}", want in t)
-    ok("audio is base64 in JSON, not binary frames", bin_audio == 0,
-       f"{bin_audio} binary bytes")
-    ok("no native events leak in",
-       not any(x in t for x in ("ready", "speech", "eou", "start", "txt", "end")))
-    errs = [e for e in evs if e.get("type") == "error"]
-    ok("a healthy turn reports no error", not errs,
-       errs[0].get("error", {}).get("code", "") if errs else "")
-    s.close()
-
-def test_native(host, port, token):
-    print("\n/v1/live — the native protocol")
+def test_live(host, port, token):
+    print("\n/v1/live")
     s = Sock(host, port, "/v1/live", token)
     ok("handshake upgrades", "101" in s.status, s.status)
     hello, _ = s.collect(3)
@@ -171,14 +137,12 @@ def test_native(host, port, token):
         ok("ready states the turn cap", bool(ready.get("max_turn_s")),
            f"{ready.get('max_turn_s')} s")
 
-    t0 = say(s, 4.0, 0.0, native=True)
+    t0 = say(s, 4.0, 0.0)
     evs, bin_audio = s.collect(45, until="end")
     t = types(evs)
     for want in ("speech", "eou", "start", "txt", "end"):
         ok(f"emits {want}", want in t)
     ok("reply audio arrives as binary frames", bin_audio > 0, f"{bin_audio} bytes")
-    ok("no OpenAI events leak in", not any(x.startswith(("response.", "input_audio_buffer.",
-                                                        "conversation.")) for x in t))
     end = next((e for e in evs if e.get("t") == "end"), {})
     ok("end carries the numbers",
        "out_tok" in end and "ttft_ms" in end and "text" in end,
@@ -186,20 +150,20 @@ def test_native(host, port, token):
 
     # The turn detector must stay shut until the client says playback ended.
     print("  -- the played gate --")
-    t0 = say(s, 4.0, t0, native=True)
+    t0 = say(s, 4.0, t0)
     during, _ = s.collect(6)
     ok("no turn opens while the reply is still audible", not types(during),
        ",".join(types(during)))
     s.text({"t": "played"}); time.sleep(0.2)
-    t0 = say(s, 4.0, t0, native=True)
+    t0 = say(s, 4.0, t0)
     after, _ = s.collect(45, until="end")
     ok("a turn opens once played is sent", "end" in types(after))
 
     # barge overrides the gate mid-reply.
     print("  -- barge --")
-    t0 = say(s, 2.0, t0, native=True)
+    t0 = say(s, 2.0, t0)
     s.text({"t": "barge"}); time.sleep(0.2)
-    t0 = say(s, 4.0, t0, native=True)
+    t0 = say(s, 4.0, t0)
     barged, _ = s.collect(45, until="end")
     ok("barge lets an interruption through", "end" in types(barged))
     s.text({"t": "played"}); time.sleep(0.3)
@@ -217,6 +181,16 @@ def test_native(host, port, token):
     ok("empty text is refused", "err" in types(eevs))
     s.close()
 
+    # There is one endpoint. Anything else upgrades and is then closed,
+    # rather than being handed a session it cannot drive.
+    print("  -- routing --")
+    time.sleep(0.5)
+    o = Sock(host, port, "/v1/realtime", token)
+    gone, _ = o.collect(3)
+    ok("an unknown endpoint gets no session", not types(gone),
+       ",".join(str(x) for x in types(gone)))
+    o.close()
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--host", default="127.0.0.1")
@@ -224,9 +198,7 @@ def main():
     ap.add_argument("--token", default="")
     a = ap.parse_args()
     print(f"gl-serve at {a.host}:{a.port}")
-    test_openai(a.host, a.port, a.token)
-    time.sleep(1.0)                     # one session at a time
-    test_native(a.host, a.port, a.token)
+    test_live(a.host, a.port, a.token)
     print()
     if fails:
         print(f"FAILED: {len(fails)} — " + ", ".join(fails))

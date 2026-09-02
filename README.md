@@ -195,42 +195,20 @@ What lands on disk is what reaches the speaker — trimmed, capped, and at
 ./build/gemma-live --nod-phrases "Mm-hm.,Sure.,Okay." --nod-dump /tmp/nods
 ```
 
-## Realtime API server
+## Voice server
 
-`gl-serve` exposes the same voice loop over OpenAI's Realtime protocol, so
-anything already written against that API can drive Gemma locally.
+`gl-serve` exposes the same voice loop over a WebSocket, so a browser — or
+anything else that can hold a socket open — drives Gemma locally.
 
 ```bash
-./build/gl-serve                       # ws://127.0.0.1:8927/v1/realtime
+./build/gl-serve                       # ws://127.0.0.1:8927/v1/live
 ./build/gl-serve --web-port 9000 --vad-silence 350
 ```
 
-Audio is mono PCM16 at 24 kHz in both directions, base64 inside the JSON
-events, exactly as the protocol specifies. Turn detection defaults to
-`server_vad` (the same firered VAD the app uses); send
-`session.update` with `turn_detection: null` to drive turns yourself with
-`input_audio_buffer.commit` + `response.create`.
-
-Supported events:
-
-```
-client -> server   session.update  input_audio_buffer.append/commit/clear
-                   response.create  response.cancel  conversation.item.truncate
-
-server -> client   session.created/updated
-                   input_audio_buffer.speech_started/speech_stopped
-                   input_audio_buffer.committed/cleared
-                   conversation.item.created
-                   response.created  response.output_item.added
-                   response.content_part.added
-                   response.output_audio.delta/done
-                   response.output_audio_transcript.delta/done
-                   response.content_part.done  response.output_item.done
-                   response.done  error
-```
-
-Event names follow the GA schema (`response.output_audio.delta`), not the
-older beta spelling (`response.audio.delta`).
+Audio is mono PCM16 at 24 kHz in both directions, as binary frames. Turn
+detection is the same firered VAD the app uses; a client that wants to draw
+the line itself sends `{"t":"end"}` rather than waiting for silence. The
+protocol is described under [The wire protocol](#the-wire-protocol).
 
 ### Web UI
 
@@ -324,7 +302,7 @@ button opens full voice mode, not dictation into the composer.
 Two things worth knowing about how it works. The page owns echo
 cancellation via `getUserMedia`'s `echoCancellation` constraint — that is
 what makes the server's lack of a far-end reference correct rather than a
-gap, and it is the division of labour the Realtime API assumes. And
+gap: the far end is the only place the reference exists. And
 barge-in is client-side, because the server only runs turn detection when
 no response is in flight; since the browser's AEC has already removed
 Gemma's voice from the mic, anything above the floor while she speaks is
@@ -333,8 +311,8 @@ you talking over her.
 `/api/chat` deliberately takes ONE message rather than a transcript. The
 model keeps the conversation in its KV cache, so re-sending history would
 decode it again every turn and cost more the longer you talk — which is
-also why this is not `/v1/chat/completions`, whose schema is stateless by
-definition and would invite exactly that.
+also why it is not shaped like `/v1/chat/completions`, whose schema is
+stateless by definition and would invite exactly that.
 
 Chrome and Safari treat `http://localhost` as a secure context, so the
 microphone works without TLS. Reaching it from another machine needs HTTPS.
@@ -374,16 +352,15 @@ spoken   The sky is blue because of Rayleigh scattering, which is when the
 Typed answers use markdown and take the room they need; spoken ones stay to
 a sentence or two with nothing in them that cannot be read aloud.
 
-### The native protocol
+### The wire protocol
 
-`/v1/realtime` speaks OpenAI's Realtime API, which is what lets an existing
-client drive this unchanged. `/v1/live` is the same session with a protocol
-built for it instead.
+`/v1/live` is the only endpoint on the socket, and it is shaped for this
+session rather than borrowed from anything.
 
 Audio travels as **binary WebSocket frames**, raw pcm16, in both directions.
 No base64, no JSON envelope, no string allocated per 50 ms of speech. That
-is 1.00 bytes on the wire per byte of audio against 1.36, and it is the path
-that decides how soon a reply is heard.
+is 1.00 bytes on the wire per byte of audio, against the 1.36 base64 would
+cost, on the path that decides how soon a reply is heard.
 
 Control is JSON on the text opcode, with five events out —
 
@@ -396,9 +373,10 @@ Control is JSON on the text opcode, with five events out —
 {"t":"end","cancelled":false,"text":"...","out_tok":8,"ttft_ms":91,"ms":300}
 ```
 
-— against fourteen for the same turn on `/v1/realtime`, which wraps every
-fragment in event_id, response_id, item_id, output_index and content_index
-to describe items and content parts this has none of.
+— six with `{"t":"err","s":"..."}`, which is the only shape an error takes.
+Nothing here wraps a fragment in event_id, response_id, item_id,
+output_index and content_index to describe items and content parts this
+session does not have.
 
 Five verbs in:
 
@@ -683,11 +661,9 @@ transcript assembly — and run with the build:
 cd build && ctest
 ```
 
-Neither wire protocol is reachable from those: they never open a socket, so
-nothing notices when an event stops being emitted or an audio frame changes
-shape. `/v1/realtime` especially, since every change lands on `/v1/live`
-first and a compatibility surface nobody exercises is one that quietly stops
-being compatible. So:
+The wire protocol is not reachable from those: they never open a socket, so
+nothing notices when an event stops being emitted, an audio frame changes
+shape, or a turn stops ending. So:
 
 ```bash
 ./build/gl-serve &
@@ -696,9 +672,9 @@ tools/protocol-test.py                     # or --port / --token
 
 It synthesises its own audio, so there are no fixtures — but it needs the
 models loaded, which is why it is not a ctest target. It asserts the event
-sequence on both protocols, that reply audio is base64 on one and binary
-frames on the other, that neither leaks the other's vocabulary, and that the
-played gate, barge, and typed turns behave.
+sequence, that reply audio arrives as binary frames, that an unknown
+endpoint gets no session, and that the played gate, barge, and typed turns
+behave.
 ```bash
 cmake --build build --target gemma-live gl-offline gl-serve barge-test transcript-test nod-test
 cd build && ctest
