@@ -487,6 +487,13 @@ const url = p => TOKEN ? p + (p.includes('?') ? '&' : '?') + 't=' + encodeURICom
 let ws, ctx, mic, inAn, outAn, outGain, sink, sinkEl;
 let playCursor = 0, sources = [], loudRun = 0;
 let outRecent = [], gated = false;
+// How far ahead of now the first chunk of a reply is scheduled. Measured
+// against this server: the first chunk is 300 ms of audio and the second
+// arrives 284 ms later, so playback starts with about 17 ms of headroom —
+// enough that any scheduling hiccup empties the queue. Starting higher would
+// cost every reply its time-to-first-audio, so it starts small and grows
+// only on a machine that actually runs dry.
+let playLead = 0.06;
 let speaking = false, voiceOn = false, muted = false, busy = false;
 let liveBot = null, wsResponding = false, httpSpeaking = false;
 let chatAbort = null;
@@ -1096,12 +1103,27 @@ function enqueue(f32) {
   const src = ctx.createBufferSource();
   src.buffer = buf; src.connect(outGain);
   const now = ctx.currentTime;
-  if (playCursor < now) playCursor = now + 0.06;   // small lead on the first chunk
+  if (playCursor < now) playCursor = now + playLead;   // lead on the first chunk
   src.start(playCursor); playCursor += buf.duration;
   sources.push(src);
   src.onended = () => {
     sources = sources.filter(s => s !== src);
-    if (!sources.length) { speaking = false; speechEnded(); refreshBusy(); }
+    if (sources.length) return;
+    // An empty queue means the buffer ran dry, which is only the end of the
+    // reply if the server has also said so. Treating the two as the same
+    // thing made an underrun look like a finished reply: the ribbon dropped
+    // mid-sentence, and "played" went out while she was still talking —
+    // which is precisely what un-gates the server's turn detector and lets
+    // her answer herself.
+    if (wsResponding) {
+      // Ran dry with more coming. Buy margin for the next reply rather than
+      // paying for it on every one: a machine that keeps up never does.
+      playLead = Math.min(0.30, playLead + 0.06);
+      console.log('[audio] buffer ran dry mid-reply; lead now',
+                  Math.round(playLead * 1000), 'ms');
+      return;
+    }
+    speaking = false; speechEnded(); refreshBusy();
   };
   speaking = true;
   gated = true;
