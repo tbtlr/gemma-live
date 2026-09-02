@@ -1,0 +1,35 @@
+# TLS in front of gl-serve, so a browser gets a SECURE CONTEXT and will
+# hand over the microphone. Without this, http://orin.local:8927 loads
+# the page fine and then getUserMedia refuses — browsers only expose the
+# mic on https:// or localhost, and a plain-http host is neither.
+#
+# The certificate is the mkcert-issued one for orin.local, whose CA is
+# already in the Mac's system keychain. `tls <cert> <key>` tells Caddy to
+# use it rather than trying to obtain its own — this is a .local name on
+# a LAN, so there is no ACME path to take.
+{
+	admin off
+	auto_https off
+}
+
+:8443 {
+	tls /certs/jetson.pem /certs/jetson-key.pem
+
+	# reverse_proxy handles the WebSocket upgrade on /api/live without extra
+	# configuration — no Connection/Upgrade header juggling.
+	#
+	# The upstream timeouts are pinned to zero rather than left to whatever
+	# the defaults are. A live voice session is legitimately silent in both
+	# directions for as long as nobody is speaking, so anything that reaps
+	# quiet connections cuts conversations mid-sentence. The symptom does
+	# not look like a dropped socket: a client that reconnects gets a FRESH
+	# session with an empty KV cache, which answers whatever fragment of
+	# microphone audio arrives first — so the model appears to spontaneously
+	# volunteer "is there anything else I can help you with?".
+	reverse_proxy gemma-live:8927 {
+		transport http {
+			read_timeout  0
+			write_timeout 0
+		}
+	}
+}

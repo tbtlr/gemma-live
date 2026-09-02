@@ -57,16 +57,18 @@ inline bool window_is_voiced(firered_vad_context * vad, const std::vector<float>
     return n_segs > 0;
 }
 
-// ── sample-clocked end-of-utterance detector (Realtime server) ──────────
+// ── sample-clocked end-of-utterance detector (gl-serve) ─────────────────
 //
-// Mirrors OpenAI's `server_vad` turn detection: report speech_started on
-// the first voiced window, and speech_stopped once silence_ms of audio has
-// been appended without another voiced verdict.
+// Turn detection for a socket session: report the onset on the first voiced
+// window, and end of utterance once silence_ms of audio has arrived without
+// another voiced verdict. Clocked on samples appended rather than wall time,
+// so a client that sends faster or slower than real time still gets the same
+// turn boundaries.
 struct eou {
     firered_vad_context * vad = nullptr;
     int  sample_rate  = 16000;
     int  silence_ms   = 500;
-    int  prefix_pad_ms = 300;   // audio kept before onset, as the API promises
+    int  prefix_pad_ms = 300;   // audio kept before the onset
 
     std::vector<float> window;
     bool     speaking      = false;   // inside an utterance right now

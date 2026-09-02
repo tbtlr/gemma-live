@@ -1,7 +1,7 @@
-// gl-serve — an OpenAI Realtime-compatible WebSocket front-end for
-// VoiceSession.
+// gl-serve — a WebSocket voice front-end for VoiceSession, plus the web UI
+// and the HTTP endpoints that page uses.
 //
-//   client ──ws──► input_audio_buffer.append (base64 pcm16)
+//   client ──ws──► binary frames (pcm16)
 //                        │
 //                        ├─► firered VAD (turn detection)
 //                        ▼
@@ -9,16 +9,14 @@
 //                        │
 //         ┌──────────────┴───────────────┐
 //         ▼                              ▼
-//   on_token ──► response.output_audio_transcript.delta
-//   on_audio ──► response.output_audio.delta (base64 pcm16)
+//   on_token ──► {"t":"txt"}    on_audio ──► binary frames (pcm16)
 //
-// Why this protocol: gemma-live already implements every hard part of a
-// realtime voice session — server-side turn detection, barge-in, and a KV
-// rollback on abort that matches conversation.item.truncate's semantics
-// exactly (truncate the assistant turn at the point playback stopped, so
-// the model's next turn is conditioned on what the user actually heard).
-// Speaking the standard protocol makes that reusable by anything already
-// written against OpenAI's API, instead of only by src/main.cpp.
+// Why a protocol of its own: gemma-live already implements every hard part
+// of a live voice session — server-side turn detection, barge-in, and a KV
+// rollback on abort that leaves the model conditioned on what the user
+// actually heard rather than on a reply that was cut off. What that needed
+// on the wire was a way to carry audio without paying for it: binary frames
+// and five verbs. README, "The wire protocol", is the contract.
 //
 // ── Deliberate limits ───────────────────────────────────────────────────
 //
@@ -28,17 +26,17 @@
 // connected is closed with 1013 (try again later) rather than queued
 // behind an unbounded wait.
 //
-// NO INPUT TRANSCRIPTION. `conversation.item.input_audio_transcription` is
-// reported unsupported, because Gemma consumes audio as tokens through the
-// mtmd encoder and never produces a transcript of the user's speech.
-// Output transcription IS supported — those are the sampled tokens.
+// NO INPUT TRANSCRIPTION. Gemma consumes audio as tokens through the mtmd
+// encoder and never produces a transcript of the user's speech, so there is
+// nothing to report and no event that carries one. Output transcription IS
+// available — {"t":"txt"} carries the sampled tokens as they are spoken.
+// /api/transcribe is a different thing entirely: a separate model, run for
+// dictation, which never enters the conversation.
 //
-// SESSION-FIXED FIELDS. instructions, voice, temperature and
-// max_response_output_tokens are properties of the loaded VoiceSession, set
-// by the command-line flags at startup. session.update accepts them so that
-// clients which always send them keep working, but ignores the values and
-// echoes the real ones back in session.updated — a client can therefore see
-// what is actually in effect rather than being told its request was applied.
+// SESSION-FIXED SETTINGS. System prompt, voice, temperature and reply length
+// belong to the loaded VoiceSession and come from the command-line flags at
+// startup. There is no verb to change them mid-session — they would have to
+// be applied to a context already conditioned on the conversation so far.
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
