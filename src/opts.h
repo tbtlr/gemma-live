@@ -41,8 +41,8 @@ struct gl_opts {
     // tts
     std::string tts_model   = "models/vibevoice-realtime-0.5b-q4_k.gguf";
     std::string tts_voice   = "voices/vibevoice-voice-en-Gemma_woman.gguf";
-    float       tts_cfg     = 1.5f;
-    int         tts_steps   = 5;
+    float       tts_cfg     = 1.7f;
+    int         tts_steps   = 3;
     float       tts_anchor  = 0.2f;
     int         tts_chunk   = 3;          // latent frames before first audio
     float       tts_rms     = 0.06f;

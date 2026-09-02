@@ -261,8 +261,8 @@ struct VoiceSession::Impl {
 
     // Persistent TTS state
     vibevoice_context        * tts_ctx = nullptr;
-    float                      tts_cfg            = 1.5f;
-    int                        tts_steps          = 5;
+    float                      tts_cfg            = 1.7f;
+    int                        tts_steps          = 3;
     float                      tts_neg_anchor     = 0.2f;
     bool                       loudness_norm      = true;
     loudness_filter            loudness;
@@ -538,8 +538,8 @@ std::unique_ptr<VoiceSession> VoiceSession::create(const SessionConfig & cfg,
     vparams.use_gpu              = cfg.tts_gpu;
     vparams.flash_attn           = true;   // σ-VAE encoder + Qwen2.5 attention on Metal
     vparams.verbosity            = (cfg.verbosity >= 2) ? cfg.verbosity : 0;
-    vparams.cfg_scale            = (cfg.tts_cfg        > 0.0f) ? cfg.tts_cfg        : 1.5f;
-    vparams.tts_steps            = (cfg.tts_steps      > 0)    ? cfg.tts_steps      : 5;
+    vparams.cfg_scale            = (cfg.tts_cfg        > 0.0f) ? cfg.tts_cfg        : 1.7f;
+    vparams.tts_steps            = (cfg.tts_steps      > 0)    ? cfg.tts_steps      : 3;
     vparams.neg_condition_anchor = (cfg.tts_neg_anchor > 0.0f) ? cfg.tts_neg_anchor : 0.2f;
     vparams.stream_first_chunk_frames = cfg.tts_first_chunk_frames;
     s->tts_cfg          = vparams.cfg_scale;

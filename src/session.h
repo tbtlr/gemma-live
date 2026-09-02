@@ -113,8 +113,31 @@ struct SessionConfig {
      * hurts latency on M-series, because the batch waits on the slowest
      * thread. */
     int   n_threads        = 0;
-    float tts_cfg          = 1.5f;
-    int   tts_steps        = 5;
+    /* Diffusion steps, and the guidance scale that goes with them. Steps
+     * barely touch latency (see tts_first_chunk_frames below), so this is a
+     * quality choice, not a speed one.
+     *
+     * Fewer steps means each step is a larger jump, and the sampler needs
+     * more guidance to stay on the conditioning across it. Measured at 3
+     * steps by resynthesising identical replies (greedy decode, so the words
+     * are byte-identical) and counting unexplained gaps — pauses over 400 ms
+     * in the middle of an utterance, which is what under-adherence sounds
+     * like here:
+     *
+     *     cfg        1.1   1.3   1.5   1.7   2.0   2.5   3.0
+     *     gaps (s)   4.7   2.6   2.7   0.9   0.9    -     -     49-word reply
+     *     gaps (s)    -     -    0.8   0.0   0.0   0.8   0.5    one sentence
+     *
+     * 1.7 is the lowest value where the gaps disappear. Above 2.0 they come
+     * back on short replies and the crest factor climbs (4.3 -> 6.2), which
+     * is the other end of the same failure. Intelligibility does not
+     * discriminate: transcribing the output back with parakeet gives ~0% WER
+     * everywhere from 1.5 to 3.0, so this is entirely about prosody.
+     *
+     * At 5 steps the model tolerates lower guidance, which is where the old
+     * 1.5 came from; if you raise tts_steps, lower this again. */
+    float tts_cfg          = 1.7f;
+    int   tts_steps        = 3;
 
     /* Size of the FIRST TTS chunk, in latent frames (~133 ms of audio each);
      * later chunks double up to a cap. This is the largest single term in
