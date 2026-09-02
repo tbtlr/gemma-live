@@ -1,0 +1,18 @@
+# Docker reads this from the BUILD CONTEXT ROOT, not from the directory
+# holding the Dockerfile. Putting it in docker/ silently does nothing —
+# which shipped a stale vendor/CrispASR/build-static into the image and
+# broke the build with a CMakeCache path mismatch.
+#
+# No trailing slashes: .dockerignore matching is filepath.Match, and the
+# slash forms are unreliable across builder versions.
+models
+**/build
+**/build-*
+**/.venv
+**/venv
+**/__pycache__
+.git
+**/.DS_Store
+*.gguf
+*.tar
+out

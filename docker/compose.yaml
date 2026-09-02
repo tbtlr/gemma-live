@@ -1,0 +1,41 @@
+# Identical on Jetson Orin and DGX Spark.
+#
+#   docker compose up -d
+#
+# Requires nvidia-container-toolkit and a generated CDI spec on the host:
+#   sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
+#   nvidia-ctk cdi list          # expect nvidia.com/gpu=all
+#
+# CDI rather than `runtime: nvidia` deliberately: it is the supported
+# path on JetPack 6+, and it injects the host's own driver stack —
+# which is the only reason one image runs on two very different GPUs.
+services:
+  gemma-live:
+    image: ${GEMMA_LIVE_IMAGE:-gemma-live:latest}
+    container_name: gemma-live
+    restart: unless-stopped
+    devices:
+      - nvidia.com/gpu=all
+    volumes:
+      # 5.6 GB of weights, deliberately outside the image. Read-only:
+      # gl-serve never writes here, and it makes an accidental overwrite
+      # impossible.
+      - ${GEMMA_LIVE_MODELS:-/var/lib/gemma-live/models}:/opt/gemma-live/models:ro
+    ports:
+      - "${GEMMA_LIVE_PORT:-8927}:8927"
+    # Orin has 8 GB shared between CPU and GPU and is genuinely near its
+    # limit with these weights; Spark has ~120 GB unified. Set
+    # GEMMA_LIVE_ARGS=--llm-vision-off on Orin to reclaim the vision
+    # tower (~215 MB of weights plus its compute buffer). Pointless on
+    # Spark.
+    command: ${GEMMA_LIVE_ARGS:-}
+    healthcheck:
+      # gl-serve serves web/index.html at / only once the models are
+      # loaded, so this is a genuine readiness signal, not a liveness
+      # ping. start_period is long because a cold load of 5.6 GB takes
+      # minutes on an Orin.
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8927/ >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5m
