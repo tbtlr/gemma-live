@@ -5,8 +5,8 @@
 // compiled in rather than a number someone retyped into a string.
 //
 // Flags are grouped by the same three-letter prefixes the boot block prints
-// (llm, sys, mtp, tts, aec, kwd, vad, nod, fup, brg), so a line of startup output
-// tells you which flags tune it.
+// (llm, sys, mtp, tts, aec, kwd, vad, nod, fup, brg, stt, web), so a line of
+// startup output tells you which flags tune it.
 #pragma once
 
 #include <cstdio>
@@ -90,14 +90,14 @@ struct gl_opts {
     // rt — Realtime API server (gl-serve only)
     // Shared secret. Empty (the default) means no check at all, which is
     // right on loopback and wrong the moment this is behind a tunnel.
-    std::string rt_token;
+    std::string web_token;
     // Seconds of no SPEECH before a session is reclaimed. Not seconds of no
     // traffic: the microphone streams continuously, so a connection is never
     // quiet while it is open. 0 disables it.
-    int         rt_idle  = 0;
-    std::string rt_host  = "127.0.0.1";
-    int         rt_port  = 8927;
-    std::string rt_ui    = "web/index.html";
+    int         web_idle  = 0;
+    std::string web_host  = "127.0.0.1";
+    int         web_port  = 8927;
+    std::string web_root    = "web/index.html";
 
     int         fup_timeout = 5000;
     int         fup_hops    = 3;
@@ -166,7 +166,7 @@ inline std::vector<gl_opt_def> gl_option_table(gl_opts & o) {
       {"--kwd-duck",    'f', &o.kwd_duck,    "dBFS", "echo gate while the assistant is speaking"},
       {"--kwd-debug",   'b', &o.kwd_debug,   nullptr,"log transcripts and gate state"},
 
-      {"--vad-model",   's', &o.vad_model,   "PATH", "firered-vad model (end-of-turn detection)"},
+      {"--vad-model",   's', &o.vad_model,   "PATH", "firered-vad model"},
       {"--vad-silence", 'i', &o.vad_silence, "MS",   "silence before a turn is sent"},
       {"--vad-empty",   'i', &o.vad_empty,   "MS",   "send a turn the VAD heard no speech in after this"},
       {"--vad-debug",   'b', &o.vad_debug,   nullptr,"log VAD verdicts"},
@@ -181,14 +181,14 @@ inline std::vector<gl_opt_def> gl_option_table(gl_opts & o) {
       {"--nod-gain",    'f', &o.nod_gain,    "X",    "level relative to speech"},
       {"--nod-debug",   'b', &o.nod_debug,   nullptr,"log every nod and every near miss"},
       {"--nod-dump",    's', &o.nod_dump,    "DIR",  "write the rendered clips there as WAV and exit"},
-      {"--stt-model",   's', &o.stt_model,   "PATH", "transcription model; moonshine, parakeet or kyutai"},
+      {"--stt-model",   's', &o.stt_model,   "PATH", "transcription model"},
       {"--stt-threads", 'i', &o.stt_threads, "N",    "transcription threads"},
 
-      {"--rt-host",     's', &o.rt_host,     "ADDR", "address to bind"},
-      {"--rt-port",     'i', &o.rt_port,     "N",    "port to bind"},
-      {"--rt-ui",       's', &o.rt_ui,       "PATH", "web ui page to serve at /"},
-      {"--rt-token",    's', &o.rt_token,    "STR",  "require ?t=STR on every request"},
-      {"--rt-idle",     'i', &o.rt_idle,     "SEC",  "reclaim a session after SEC without speech (0 = never)"},
+      {"--web-host",     's', &o.web_host,     "ADDR", "address to bind"},
+      {"--web-port",     'i', &o.web_port,     "N",    "port to bind"},
+      {"--web-root",    's', &o.web_root,    "PATH", "page served at /"},
+      {"--web-token",    's', &o.web_token,    "STR",  "require ?t=STR on every request"},
+      {"--web-idle",     'i', &o.web_idle,     "SEC",  "reclaim a session after SEC without speech (0 = never)"},
 
       {"--fup-timeout", 'i', &o.fup_timeout, "MS",   "how long the follow-up window stays open"},
       {"--fup-hops",    'i', &o.fup_hops,    "N",    "100 ms hops of voice needed to continue"},
@@ -219,7 +219,7 @@ inline const char * gl_group_title(const std::string & prefix) {
         { "nod",     "backchannels"        },
         { "brg",     "barge-in"            },
         { "stt",     "dictation"           },
-        { "rt",      "realtime server"     },
+        { "web",     "web server"          },
         { "general", "general"             },
     };
     for (const auto & n : names) if (prefix == n.prefix) return n.title;
@@ -228,7 +228,7 @@ inline const char * gl_group_title(const std::string & prefix) {
 
 // `groups` is the whitelist of flag prefixes this binary accepts — gl-serve
 // has no microphone, so --kwd-* would be a lie there, and gemma-live has no
-// socket, so --rt-* would be a lie here. Restricting both the usage text and
+// socket, so --web-* would be a lie here. Restricting both the usage text and
 // the parser from one list keeps a flag from being documented by a binary
 // that would ignore it.
 inline bool gl_group_enabled(const std::vector<std::string> & groups, const std::string & g) {

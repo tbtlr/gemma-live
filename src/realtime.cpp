@@ -857,9 +857,9 @@ static void serve_client(int fd, VoiceSession & vs, const gl_opts & O, bool nati
 
     // How often the reader wakes with nothing to read. That tick is also when
     // the idle check runs, so it has to be well under the idle window — at the
-    // old flat 30 s, --rt-idle 8 could never fire before 30.
-    const int poll_ms = (O.rt_idle > 0)
-                      ? std::max(250, std::min(30000, O.rt_idle * 1000 / 4))
+    // old flat 30 s, --web-idle 8 could never fire before 30.
+    const int poll_ms = (O.web_idle > 0)
+                      ? std::max(250, std::min(30000, O.web_idle * 1000 / 4))
                       : 30000;
 
     evq        q;
@@ -873,8 +873,8 @@ static void serve_client(int fd, VoiceSession & vs, const gl_opts & O, bool nati
                 // Reclaim a session nobody is using. Only while no reply is in
                 // flight: a long answer is not an idle connection, and cutting
                 // one off mid-sentence would be worse than holding the slot.
-                if (O.rt_idle > 0 && !S.active.load()
-                    && now_ms() - S.last_speech_ms.load() > (long long) O.rt_idle * 1000) {
+                if (O.web_idle > 0 && !S.active.load()
+                    && now_ms() - S.last_speech_ms.load() > (long long) O.web_idle * 1000) {
                     if (O.verbosity > 0) fprintf(stderr, "  [reclaimed: idle]\n");
                     ws::send_close(fd, 1000, "idle");
                     break;
@@ -1352,7 +1352,7 @@ static void serve_page(int fd, const std::string & ui_path, const std::string & 
     if (body.empty()) {
         ws::send_http(fd, "500 Internal Server Error", "text/plain",
                       "cannot read " + ui_path + "\n"
-                      "Run gl-serve from the repo root, or pass --rt-ui.\n");
+                      "Run gl-serve from the repo root, or pass --web-root.\n");
         return;
     }
     ws::send_http(fd, "200 OK", "text/html; charset=utf-8", body);
@@ -1373,7 +1373,7 @@ int main(int argc, char ** argv) {
     // --llm-vision-off gives back the ~215 MiB of weights and the ~101 MiB
     // Metal compute buffer for a text- and speech-only server.
     O.llm_vision = true;
-    const std::vector<std::string> groups = {"llm", "sys", "mtp", "tts", "vad", "stt", "rt"};
+    const std::vector<std::string> groups = {"llm", "sys", "mtp", "tts", "vad", "stt", "web"};
     {
         std::string err;
         if (!gl_parse_args(argc, argv, O, &err, groups)) {
@@ -1447,7 +1447,7 @@ int main(int argc, char ** argv) {
                             O.stt_model.empty() ? "(no model set)" : O.stt_model.c_str());
     }
 
-    const int lfd = ws::listen_on(O.rt_host.c_str(), O.rt_port, &err);
+    const int lfd = ws::listen_on(O.web_host.c_str(), O.web_port, &err);
     if (lfd < 0) {
         fprintf(stderr, "ERR: %s\n", err.c_str());
         // Overwhelmingly this is another gl-serve still running, which is
@@ -1456,19 +1456,19 @@ int main(int argc, char ** argv) {
             fprintf(stderr,
                 "     Something is already listening there. Find it with:\n"
                 "       lsof -nP -iTCP:%d -sTCP:LISTEN\n"
-                "     then stop it, or use a different --rt-port.\n", O.rt_port);
+                "     then stop it, or use a different --web-port.\n", O.web_port);
         }
         return 1;
     }
 
     if (O.verbosity > 0) {
         fprintf(stderr, "\ngl-serve ready.\n");
-        fprintf(stderr, "  http://%s:%d/                 web ui\n", O.rt_host.c_str(), O.rt_port);
-        fprintf(stderr, "  ws://%s:%d/v1/realtime        voice session\n", O.rt_host.c_str(), O.rt_port);
-        fprintf(stderr, "  http://%s:%d/api/chat         text chat\n", O.rt_host.c_str(), O.rt_port);
+        fprintf(stderr, "  http://%s:%d/                 web ui\n", O.web_host.c_str(), O.web_port);
+        fprintf(stderr, "  ws://%s:%d/v1/realtime        voice session\n", O.web_host.c_str(), O.web_port);
+        fprintf(stderr, "  http://%s:%d/api/chat         text chat\n", O.web_host.c_str(), O.web_port);
         if (g_stt.loaded()) {
             fprintf(stderr, "  http://%s:%d/api/transcribe   dictation\n",
-                    O.rt_host.c_str(), O.rt_port);
+                    O.web_host.c_str(), O.web_port);
         }
         fprintf(stderr, "  pcm16 mono 24 kHz in and out, server_vad at %d ms\n\n",
                 O.vad_silence);
@@ -1490,7 +1490,7 @@ int main(int argc, char ** argv) {
         std::string herr;
         // The token guards every route, not just the socket: locking the
         // front door and leaving /api/chat open would be no lock at all.
-        const ws::hs r = ws::handshake(fd, &req, &herr, O.rt_token);
+        const ws::hs r = ws::handshake(fd, &req, &herr, O.web_token);
         if (r == ws::hs::plain_http) {
             if (req.method == "OPTIONS") {
                 // CORS preflight for a cross-origin /api/chat fetch from a web UI.
@@ -1517,7 +1517,7 @@ int main(int argc, char ** argv) {
                 // queue behind a spoken reply.
                 serve_transcribe(fd, req.body);
             } else {
-                serve_page(fd, O.rt_ui, req.path);
+                serve_page(fd, O.web_root, req.path);
             }
             close(fd);
             continue;

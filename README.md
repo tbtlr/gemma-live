@@ -129,8 +129,8 @@ tune it. `--help` lists all of them with their defaults.
   nod   --nod-off --nod-phrases --nod-after --nod-gap --nod-mono
         --nod-per-turn --nod-len --nod-gain --nod-debug --nod-dump
   stt   --stt-model --stt-threads                  (gl-serve only)
-  rt    --rt-host --rt-port --rt-ui                (gl-serve only)
-  rt    --rt-host --rt-port --rt-ui                (gl-serve only)
+  web   --web-host --web-port --web-root --web-token --web-idle
+                                                   (gl-serve only)
   fup   --fup-timeout --fup-hops --fup-gate
   brg   --brg-ratio --brg-floor --brg-sustain --brg-debug
 ```
@@ -202,7 +202,7 @@ anything already written against that API can drive Gemma locally.
 
 ```bash
 ./build/gl-serve                       # ws://127.0.0.1:8927/v1/realtime
-./build/gl-serve --rt-port 9000 --vad-silence 350
+./build/gl-serve --web-port 9000 --vad-silence 350
 ```
 
 Audio is mono PCM16 at 24 kHz in both directions, base64 inside the JSON
@@ -279,7 +279,7 @@ Your own spoken turns appear there too, which takes a second model: Gemma
 consumes audio as tokens and never emits a transcript of what it heard. The
 page posts the turn's audio to `/api/transcribe` at the moment speech stops
 and drops a placeholder bubble in straight away, so the row is there before
-the words are. Nothing waits on it — moonshine is a different model, the
+the words are. Nothing waits on it — transcription is a different model, the
 route deliberately skips the turn lock, and the two run side by side.
 Measured over four turns, a reply with transcription running alongside it
 reached first audio in 281 and 283 ms against 295 and 286 ms without: no
@@ -307,7 +307,7 @@ is subsetted to the glyphs used here: the whole font is 2.5 MB, these are
 4 KB.
 
 It is one file (`web/index.html`), served from disk so editing it and
-reloading needs no rebuild; `--rt-ui` points elsewhere.
+reloading needs no rebuild; `--web-root` points elsewhere.
 
 The page predates `/api/transcribe` and does not use it yet — the wave
 button opens full voice mode, not dictation into the composer.
@@ -421,10 +421,10 @@ Both off by default, because on loopback neither earns its keep. Together
 they are what makes a tunnel safe to hand out.
 
 ```bash
-./build/gl-serve --rt-token s3cret --rt-idle 300
+./build/gl-serve --web-token s3cret --web-idle 300
 ```
 
-`--rt-token` requires `?t=` on **every** route, checked in the handshake:
+`--web-token` requires `?t=` on **every** route, checked in the handshake:
 an unauthorised peer gets 401 and is never upgraded. The page passes on
 whatever token it was opened with, so `https://host/?t=s3cret` is the whole
 setup — a browser cannot put a header on a WebSocket, which is why the query
@@ -432,7 +432,7 @@ string carries it for the socket and the fetches alike. It is a shared
 secret, not per-user auth; Cloudflare Access does the real thing for free if
 you want it.
 
-`--rt-idle` reclaims a session after that many seconds **without speech** —
+`--web-idle` reclaims a session after that many seconds **without speech** —
 not without traffic, because the microphone streams continuously and a
 connection is never quiet while it is open. It waits for any reply in flight
 to finish, so a long answer is never cut off. This matters more than the
@@ -497,9 +497,9 @@ the point: dictation fills a box the user then edits and may never send, so
 it must not be able to change what the assistant believes was said. It is a
 different model for the same reason — Gemma consumes audio as tokens and
 never emits a transcript of it, so asking Gemma would mean running a real
-turn and rolling it back. Moonshine sits entirely outside the conversation,
-and `/api/transcribe` deliberately does not take the turn lock, so dictating
-never queues behind a spoken reply.
+turn and rolling it back. The transcription model sits entirely outside the
+conversation, and `/api/transcribe` deliberately does not take the turn
+lock, so dictating never queues behind a spoken reply.
 
 Single-shot by design. For ChatGPT's live partials, call it repeatedly on
 the growing buffer: re-transcribing from the start each time is what keeps
@@ -589,7 +589,7 @@ turns.
 
 ## Choosing a transcription model
 
-`--stt-model` takes moonshine, parakeet or kyutai weights and dispatches on
+`--stt-model` takes any of the supported weights and dispatches on
 the GGUF's `general.architecture` — not by trying loaders until one accepts,
 because parakeet's loader *succeeds* on a kyutai model and then transcribes
 nothing, which is a silent wrong answer rather than an error.
