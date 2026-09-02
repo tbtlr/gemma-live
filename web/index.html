@@ -472,10 +472,6 @@ const BARGE_RMS = 0.02, BARGE_HOLD = 3;
 // residual scales with how loud she is, and the user talking over her is
 // much closer to the microphone than the speakers are.
 const BARGE_ECHO = 0.4;
-// Residual echo, sampled while she is audible: mic RMS over output RMS.
-// Prints after each reply, so this can be re-checked on a new device or a
-// new browser without redoing the investigation that produced it.
-let coupling = [];
 
 // Whatever token this page was opened with, carried on to everything it asks
 // for. A browser cannot put a header on a WebSocket, so the query string is
@@ -1079,24 +1075,8 @@ function speechEnded() {
   if (ws && ws.readyState === 1) ws.send(JSON.stringify({ t: 'played' }));
   httpSpeaking = false;
   outRecent = []; loudRun = 0;
-  const r = echoReport();
-  if (r) console.log('[echo] residual after the browser AEC:', r);
 }
 
-// dB of the ratio, which is how echo return loss is normally quoted.
-function echoReport() {
-  if (coupling.length < 4) { coupling = []; return null; }
-  const s = coupling.slice().sort((a, b) => a - b);
-  const dB = v => +(20 * Math.log10(Math.max(v, 1e-6))).toFixed(1);
-  const out = {
-    chunks: s.length,
-    quietest_dB: dB(s[0]),
-    median_dB:   dB(s[s.length >> 1]),
-    loudest_dB:  dB(s[s.length - 1]),
-  };
-  coupling = [];
-  return out;
-}
 function enqueue(f32) {
   const buf = ctx.createBuffer(1, f32.length, RATE);
   buf.copyToChannel(f32, 0);
@@ -1260,10 +1240,7 @@ function onChunk(f32) {
     outRecent.push(outRms());
     if (outRecent.length > 5) outRecent.shift();
 
-    // Residual after the browser's canceller, for ?echo. Only meaningful
-    // while she is actually loud; near-silence makes the ratio noise.
     const outNow = Math.max(...outRecent);
-    if (outNow > 0.02) coupling.push(rms(f32) / outNow);
 
     // Client-side barge-in: the server runs turn detection only when no
     // response is in flight, so cutting a reply short is the client's job.
@@ -1274,10 +1251,6 @@ function onChunk(f32) {
     const thr = Math.max(BARGE_RMS, outNow * BARGE_ECHO);
     if (rms(f32) > thr) {
       if (++loudRun >= BARGE_HOLD) {
-        // A typed reply is spoken over HTTP, not the socket, so there is no
-        // response for the socket to cancel — asking anyway earns a spurious
-        // "no active response" error. Stopping playback is the part that
-        // matters either way.
         // "barge" is both the cancel and the permission to open a turn on
         // what is being said over her — the server holds that back until the
         // client says the reply is no longer audible.
