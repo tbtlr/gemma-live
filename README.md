@@ -309,6 +309,15 @@ is subsetted to the glyphs used here: the whole font is 2.5 MB, these are
 It is one file (`web/index.html`), served from disk so editing it and
 reloading needs no rebuild; `--web-root` points elsewhere.
 
+`--web-root` takes a directory or a single file. A file is the whole
+site — served at `/`, nothing else exists — which is what the shipped
+page is: everything inlined, one thing to edit, no build step. Point it
+at a directory instead and it serves that tree, for when a page has
+outgrown one file. Paths are resolved before they are served and the
+result must still be inside the root, so `..` and a symlink pointing out
+are both refused — the second is why the check resolves rather than
+comparing strings.
+
 The page predates `/api/transcribe` and does not use it yet — the wave
 button opens full voice mode, not dictation into the composer.
 

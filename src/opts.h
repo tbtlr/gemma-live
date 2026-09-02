@@ -97,6 +97,8 @@ struct gl_opts {
     int         web_idle  = 0;
     std::string web_host  = "127.0.0.1";
     int         web_port  = 8927;
+    // A directory to serve, or a single file to serve at /. The page is one
+    // self-contained file today, so that is the default.
     std::string web_root    = "web/index.html";
 
     int         fup_timeout = 5000;
@@ -186,7 +188,7 @@ inline std::vector<gl_opt_def> gl_option_table(gl_opts & o) {
 
       {"--web-host",     's', &o.web_host,     "ADDR", "address to bind"},
       {"--web-port",     'i', &o.web_port,     "N",    "port to bind"},
-      {"--web-root",    's', &o.web_root,    "PATH", "page served at /"},
+      {"--web-root",    's', &o.web_root,    "PATH", "directory to serve, or a single page"},
       {"--web-token",    's', &o.web_token,    "STR",  "require ?t=STR on every request"},
       {"--web-idle",     'i', &o.web_idle,     "SEC",  "reclaim a session after SEC without speech (0 = never)"},
 

@@ -43,7 +43,9 @@
 #include <chrono>
 #include <condition_variable>
 #include <csignal>
+#include <climits>
 #include <cstdio>
+#include <sys/stat.h>
 #include <cstring>
 #include <deque>
 #include <mutex>
@@ -1343,19 +1345,97 @@ static void serve_chat(int fd, VoiceSession & vs, const std::string & body) {
     // restore_guard puts the previous callbacks back.
 }
 
-static void serve_page(int fd, const std::string & ui_path, const std::string & req_path) {
-    if (req_path != "/" && req_path != "/index.html") {
+// Content type from the extension. Only what a page here plausibly loads —
+// an unknown type is served as octet-stream rather than guessed at, because
+// guessing text/html for something that is not is how a stored file becomes
+// a script.
+static const char * mime_for(const std::string & path) {
+    const auto dot = path.rfind('.');
+    if (dot == std::string::npos) return "application/octet-stream";
+    const std::string e = path.substr(dot + 1);
+    if (e == "html" || e == "htm") return "text/html; charset=utf-8";
+    if (e == "css")   return "text/css; charset=utf-8";
+    if (e == "js" || e == "mjs") return "text/javascript; charset=utf-8";
+    if (e == "json" || e == "map") return "application/json; charset=utf-8";
+    if (e == "svg")   return "image/svg+xml";
+    if (e == "png")   return "image/png";
+    if (e == "jpg" || e == "jpeg") return "image/jpeg";
+    if (e == "gif")   return "image/gif";
+    if (e == "webp")  return "image/webp";
+    if (e == "ico")   return "image/x-icon";
+    if (e == "woff2") return "font/woff2";
+    if (e == "woff")  return "font/woff";
+    if (e == "wasm")  return "application/wasm";
+    if (e == "txt")   return "text/plain; charset=utf-8";
+    if (e == "wav")   return "audio/wav";
+    return "application/octet-stream";
+}
+
+// The document root, which may be a directory or a single file.
+//
+// A file is the whole site: it is served at / and nothing else exists. That
+// is what web/index.html is — everything inlined, so there is one thing to
+// edit and no build step. A directory serves its tree, for when a page has
+// grown past that.
+//
+// Escaping the root is the thing to get right. The path is resolved and the
+// result must still be inside the root: a check on the string alone is not
+// enough, because a symlink inside the root can point anywhere and "%2e%2e"
+// is not ".." until it is.
+static void serve_page(int fd, const std::string & root, const std::string & req_path) {
+    struct stat rst {};
+    const bool root_is_dir = (stat(root.c_str(), &rst) == 0) && S_ISDIR(rst.st_mode);
+
+    if (!root_is_dir) {
+        if (req_path != "/" && req_path != "/index.html") {
+            ws::send_http(fd, "404 Not Found", "text/plain", "not found\n");
+            return;
+        }
+        const std::string body = read_file(root);
+        if (body.empty()) {
+            ws::send_http(fd, "500 Internal Server Error", "text/plain",
+                          "cannot read " + root + "\n"
+                          "Run gl-serve from the repo root, or pass --web-root.\n");
+            return;
+        }
+        ws::send_http(fd, "200 OK", "text/html; charset=utf-8", body);
+        return;
+    }
+
+    std::string rel = (req_path == "/") ? "/index.html" : req_path;
+    if (rel.find('\0') != std::string::npos) {
+        ws::send_http(fd, "400 Bad Request", "text/plain", "bad path\n");
+        return;
+    }
+
+    char real_root[PATH_MAX], real_file[PATH_MAX];
+    if (!realpath(root.c_str(), real_root)) {
+        ws::send_http(fd, "500 Internal Server Error", "text/plain",
+                      "cannot resolve " + root + "\n");
+        return;
+    }
+    const std::string want = std::string(real_root) + rel;
+    if (!realpath(want.c_str(), real_file)) {
         ws::send_http(fd, "404 Not Found", "text/plain", "not found\n");
         return;
     }
-    const std::string body = read_file(ui_path);
-    if (body.empty()) {
-        ws::send_http(fd, "500 Internal Server Error", "text/plain",
-                      "cannot read " + ui_path + "\n"
-                      "Run gl-serve from the repo root, or pass --web-root.\n");
+
+    // Inside the root, and a regular file. The trailing slash matters: it
+    // stops "/srv/wwwroot-secrets" passing a prefix test against "/srv/www".
+    std::string base = real_root;
+    if (base.empty() || base.back() != '/') base += '/';
+    if (std::string(real_file).compare(0, base.size(), base) != 0) {
+        ws::send_http(fd, "403 Forbidden", "text/plain", "outside the web root\n");
         return;
     }
-    ws::send_http(fd, "200 OK", "text/html; charset=utf-8", body);
+    struct stat fst {};
+    if (stat(real_file, &fst) != 0 || !S_ISREG(fst.st_mode)) {
+        ws::send_http(fd, "404 Not Found", "text/plain", "not found\n");
+        return;
+    }
+
+    const std::string body = read_file(real_file);
+    ws::send_http(fd, "200 OK", mime_for(real_file), body);
 }
 
 int main(int argc, char ** argv) {
