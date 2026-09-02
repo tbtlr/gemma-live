@@ -16,6 +16,11 @@ cmake-build-*/
 models/*.gguf
 models/*.bin
 
+# Python bytecode from tools/ — protocol-test.py leaves one behind on every
+# run, and none of it belongs to anyone but the interpreter that made it.
+__pycache__/
+*.pyc
+
 # Voices — same reason
 voices/*.gguf
 voices/*.bin
