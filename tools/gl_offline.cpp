@@ -103,6 +103,8 @@ int main(int argc, char ** argv) {
     if (const char * v = std::getenv("GL_MTP"))       cfg.enable_mtp  = std::atoi(v) != 0;
     if (const char * v = std::getenv("GL_MTP_DRAFT")) cfg.mtp_n_draft = std::max(1, std::atoi(v));
     if (const char * v = std::getenv("GL_TEMP"))      cfg.temperature = (float) std::atof(v);
+    if (const char * v = std::getenv("GL_TTS_CPU"))   cfg.tts_gpu     = std::atoi(v) == 0;
+    if (const char * v = std::getenv("GL_VERBOSITY")) cfg.verbosity   = std::atoi(v);
     if (const char * v = std::getenv("GL_TTS_STEPS"))  cfg.tts_steps   = std::max(1, std::atoi(v));
     if (const char * v = std::getenv("GL_TTS_CFG"))    cfg.tts_cfg     = (float) std::atof(v);
     if (const char * v = std::getenv("GL_TTS_FIRST_CHUNK")) cfg.tts_first_chunk_frames = std::max(1, std::atoi(v));
