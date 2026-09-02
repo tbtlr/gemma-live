@@ -97,9 +97,8 @@ struct gl_opts {
     int         web_idle  = 0;
     std::string web_host  = "127.0.0.1";
     int         web_port  = 8927;
-    // A directory to serve, or a single file to serve at /. The page is one
-    // self-contained file today, so that is the default.
-    std::string web_root    = "web/index.html";
+    // A directory to serve, or a single file to serve at /.
+    std::string web_root    = "web";
 
     int         fup_timeout = 5000;
     int         fup_hops    = 3;

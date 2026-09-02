@@ -306,17 +306,17 @@ check passes and the buttons are briefly unlabelled instead. Google Symbols
 is subsetted to the glyphs used here: the whole font is 2.5 MB, these are
 4 KB.
 
-It is one file (`web/index.html`), served from disk so editing it and
-reloading needs no rebuild; `--web-root` points elsewhere.
+Three files in `web/` — `index.html`, `app.css`, `app.js` — served from
+disk, so editing one and reloading needs no rebuild and there is still no
+build step. It was a single inlined file until it passed seventy kilobytes,
+at which point finding anything in it cost more than the extra two requests.
 
-`--web-root` takes a directory or a single file. A file is the whole
-site — served at `/`, nothing else exists — which is what the shipped
-page is: everything inlined, one thing to edit, no build step. Point it
-at a directory instead and it serves that tree, for when a page has
-outgrown one file. Paths are resolved before they are served and the
-result must still be inside the root, so `..` and a symlink pointing out
-are both refused — the second is why the check resolves rather than
-comparing strings.
+`--web-root` takes that directory, or a single file. A file is the whole
+site: served at `/`, nothing else exists — useful for dropping one
+self-contained page somewhere. Paths under a directory root are resolved
+before they are served and the result must still be inside the root, so
+`..` and a symlink pointing out are both refused — the second is why the
+check resolves rather than comparing strings.
 
 The page predates `/api/transcribe` and does not use it yet — the wave
 button opens full voice mode, not dictation into the composer.

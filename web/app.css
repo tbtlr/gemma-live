@@ -1,0 +1,380 @@
+/* Gemma Live — styles.
+ *
+ * Loaded by index.html rather than inlined. The page was one file for a
+ * while and the reason was real: nothing to build, one thing to edit. It
+ * outgrew that at seventy kilobytes, and --web-root serves a directory now.
+ */
+/* Design tokens lifted verbatim from llama.cpp's web UI (tools/ui/src/app.css)
+   so this sits in the same visual family: shadcn neutral in oklch, one radius. */
+:root {
+  /* The one boxy radius in the design: the composer, and anything that has
+     to sit with it. Bubbles are pills and icons are circles; those are the
+     only other shapes. (--radius came with the palette and is unused.) */
+  --radius-box: 1.6rem;
+  --radius: 0.625rem;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.95 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.95 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.875 0 0);
+  --input: oklch(0.92 0 0);
+  --ring: oklch(0.708 0 0);
+  /* Gemma speaks in her own blue — the middle stop of the logo gradient
+     (#446EFF -> #2E96FF -> #B1C5FF), so the ribbon and the mark come from
+     the same palette. The microphone gets the page's own foreground, which
+     is white here and near-black under a light theme; a literal white would
+     be invisible on the light one, and unlike the favicon there is no tile
+     to sit it on. */
+  --speak:  #2E96FF;
+  --listen: var(--foreground);
+  --font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Monaco, 'Cascadia Code', monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: oklch(0.16 0 0);
+    --foreground: oklch(0.985 0 0);
+    --card: oklch(0.205 0 0);
+    --primary: oklch(0.922 0 0);
+    --primary-foreground: oklch(0.205 0 0);
+    --secondary: oklch(0.29 0 0);
+    --secondary-foreground: oklch(0.985 0 0);
+    --muted: oklch(0.269 0 0);
+    --muted-foreground: oklch(0.708 0 0);
+    --accent: oklch(0.269 0 0);
+    --destructive: oklch(0.704 0.191 22.216);
+    --border: oklch(1 0 0 / 14%);
+    --input: oklch(1 0 0 / 18%);
+    --ring: oklch(0.556 0 0);
+  }
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--background); color: var(--foreground);
+  font: 15px/1.6 'Google Sans Flex', ui-sans-serif, -apple-system, 'SF Pro Text',
+        Inter, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  display: flex; flex-direction: column;
+}
+button { font: inherit; color: inherit; border: 0; background: none; cursor: pointer; }
+
+/* ── header ───────────────────────────────────────────────────────── */
+header {
+  /* Proportions taken from Google's own Gemma lockup: the mark stands 1.69x
+     the wordmark's cap height, separated by 0.18 of that cap. At an 18px
+     wordmark that puts the mark at 22px and the gap at 2px.
+     align-items does the centring — measured against a real baseline the
+     mark lands 0.5px off the cap centre, and a hand-tuned nudge here was
+     wrong by 1.8px in the other direction. */
+  display: flex; align-items: center; gap: 2px;
+  padding: 12px 16px; border-bottom: 1px solid var(--border); flex: none;
+}
+header b { font-weight: 600; font-size: 18px; letter-spacing: -.01em; }
+/* Google's Gemma mark, gradient variant — the same three stops the ribbon
+   draws from (#446EFF -> #2E96FF -> #B1C5FF, --speak being the middle one),
+   so the header and voice mode are visibly the same blue.
+
+   Fixed rather than currentColor, which the monochrome variant used to
+   follow the theme. These blues carry on both grounds; the palest stop is
+   the one to watch on a light theme, which is why it is the far end of the
+   run and not the near one.
+
+   Not below about 20px: the mark is a diamond inside a ringed crosshair,
+   and under that those hairlines blur into an indistinct sparkle. */
+.mark { width: 22px; height: 22px; flex: none; display: block; }
+
+/* ── conversation ─────────────────────────────────────────────────── */
+main { flex: 1; overflow-y: auto; }
+#thread { max-width: 46rem; margin: 0 auto; padding: 28px 16px 8px;
+          display: flex; flex-direction: column; gap: 22px; }
+.msg.user  { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.msg.user .body {
+  background: var(--secondary); color: var(--secondary-foreground);
+  padding: 9px 15px; border-radius: 999px; max-width: 80%;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.msg.bot .body { width: 100%; line-height: 1.75; white-space: pre-wrap; overflow-wrap: anywhere; }
+.msg.bot .info { font-size: 11px; color: var(--muted-foreground); font-variant-numeric: tabular-nums; margin-top: 6px; }
+.cursor::after { content: '▍'; opacity: .6; animation: blink 1.1s steps(2) infinite; }
+/* Status standing in for the reply, not the reply itself — dimmed and
+   breathing so it does not read as the answer having arrived. */
+.thinking { color: var(--muted-foreground); animation: pulse 1.6s ease-in-out infinite; }
+/* Waiting on the transcript: a bubble the width of a few words, pulsing, so
+   the turn is visible before the words are. */
+.pending { min-width: 3.2rem; min-height: 1.5em; animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .45; } }
+@keyframes blink { 50% { opacity: 0; } }
+
+#empty { display: none; color: var(--muted-foreground); text-align: center;
+         padding: 0 0 12px; }
+body.blank #empty { display: block; }
+
+/* Empty thread: the greeting and the composer sit together in the middle of
+   the page and drop into place on the first message. The paired auto margins
+   split the free space above main and below footer, which centres the pair
+   without a wrapper element to add and then unwind. */
+body.blank main    { flex: 0 0 auto; margin-top: auto; overflow: visible; }
+body.blank footer  { margin-bottom: auto; }
+body.blank #thread { padding-top: 0; }
+#empty h2 { color: var(--foreground); font-size: 24px; font-weight: 400;
+             letter-spacing: -.015em; margin: 0; }
+
+/* ── composer ─────────────────────────────────────────────────────── */
+/* A little more room below the composer than the hint used to leave, so
+   dropping it does not leave the box sitting on the window edge. */
+footer { flex: none; padding: 10px 16px calc(22px + env(safe-area-inset-bottom)); }
+#composer {
+  max-width: 46rem; margin: 0 auto; display: flex; flex-direction: column;
+  border: 1px solid var(--input); border-radius: var(--radius-box); padding: 7px;
+  background: var(--card); transition: border-color .15s;
+}
+/* The old composer row, now one child of it, so attachments can stack above
+   the text without the thumbnails competing with the buttons for the
+   right-hand edge. */
+#row { display: flex; align-items: flex-end; gap: 6px; }
+/* The attach button provides the text's left inset. Where it is not there,
+   the padding has to, or the words start hard against the border. */
+body.voice #composer, body.novision #composer { padding-left: 16px; }
+#composer:focus-within { border-color: var(--ring); }
+#box {
+  flex: 1; border: 0; outline: 0; resize: none; background: none; color: inherit;
+  font: inherit; padding: 7px 0; max-height: 40vh;
+  /* 22 rather than 1.5 (= 22.5), so that 7 + 22 + 7 is exactly the 36px of
+     the buttons beside it. At 22.5 the textarea rounded up to 37, and since
+     the row bottom-aligns, that half pixel became a whole one of dead space
+     ABOVE the buttons and none below — which reads as the box being padded
+     more at the top than the bottom. */
+  line-height: 22px;
+}
+#box::placeholder { color: var(--muted-foreground); }
+.icon {
+  width: 36px; height: 36px; border-radius: 50%; flex: none;
+  display: flex; align-items: center; justify-content: center;
+  transition: opacity .15s, background-color .15s;
+}
+.icon:hover { background-color: var(--accent); }
+
+/* Google Symbols ligatures, hidden until the font is confirmed loaded.
+   The gate is not decoration: the icon font is declared font-display: swap,
+   so without it every button would flash its ligature — the literal word
+   "mic_off", "close" — in the fallback face while the font downloads, and
+   would keep showing it forever with no network. An empty button that still
+   works beats one labelled "mic_off". */
+.gs {
+  font-family: 'Google Symbols'; font-weight: normal; font-style: normal;
+  font-size: 20px; line-height: 1; letter-spacing: normal; text-transform: none;
+  white-space: nowrap; word-wrap: normal; direction: ltr;
+  -webkit-font-feature-settings: 'liga'; -webkit-font-smoothing: antialiased;
+  /* Google's own pages ask for wght 100..300 at opsz 48, which is drawn for
+     large display and reads thin at 20px. opsz matches the render size, and
+     wght 350 with a little GRAD sits between the settings that read as too
+     thin and too heavy — GRAD being the axis whose whole job is
+     thickening strokes on a dark ground without changing the footprint. */
+  font-variation-settings: 'FILL' 0, 'wght' 350, 'GRAD' 50, 'opsz' 24, 'ROND' 100;
+  display: none;
+}
+body.gsym .gs  { display: block; }
+.icon.filled { background-color: var(--primary); color: var(--primary-foreground); }
+.icon.filled:hover { opacity: .85; background-color: var(--primary); }
+/* Keep the shape when there is nothing to send. Dropping the fill and
+   dimming to 0.35 left it invisible against a dark ground, which reads as
+   a missing button rather than an inactive one. */
+.icon:disabled { cursor: default; }
+/* The filled buttons say it with their fill (below). A plain glyph has
+   nothing to change, so it dims — and must stop lighting up on hover, which
+   otherwise makes a dead button look live. */
+.icon:not(.filled):disabled { opacity: .4; }
+.icon:disabled:hover { background-color: transparent; }
+.icon.filled:disabled {
+  background-color: var(--muted); color: var(--muted-foreground); opacity: 1;
+}
+.icon.filled:disabled:hover { background-color: var(--muted); opacity: 1; }
+/* One affordance at a time: the composer offers voice until you type, then
+   offers send. Two buttons side by side made you choose before you had
+   decided anything. */
+#composer.typing #mic         { display: none; }
+#composer.typing #dict        { display: none; }
+body.voice #dict              { display: none; }   /* already listening */
+
+/* Dictating: the text field gives way to a live waveform and the microphone
+   to a discard/keep pair, so the only choices on screen are the two that
+   exist. Nothing is written into the box until you keep it. */
+/* flex-basis 0 with width:0. drawWave writes canvas.width from the measured
+   layout width each frame, and a canvas's intrinsic width participates in
+   flex sizing unless the basis is zero — so the two can feed back. Belt and
+   braces rather than an observed failure. */
+#wave { display: none; flex: 1 1 0; width: 0; min-width: 0;
+        height: 36px; align-self: center; }
+body.dictating #wave   { display: block; }
+body.dictating #box,
+body.dictating #dict,
+body.dictating #mic,
+body.dictating #send,
+body.dictating .round  { display: none; }
+#cancel, #accept       { display: none; }
+body.dictating #cancel,
+body.dictating #accept { display: flex; }
+#accept.working { opacity: .55; }
+#composer:not(.typing) #send  { display: none; }
+/* While a reply is being produced, the button that starts one becomes the
+   button that stops it — the same slot, so the eye does not have to hunt
+   for it, and there is never a moment with both. Typing ahead mid-reply is
+   allowed, so this has to beat the .typing rules that would show send.
+
+   Two modes sit it out. Voice mode interrupts by talking over her, and the
+   strip there is already carrying mute and end. Dictation owns the whole
+   strip and has no slot to give. Both exclusions live in the selector that
+   shows the button rather than in overrides after it, so there is only one
+   rule to weigh. */
+#stop { display: none; }
+body.responding:not(.voice):not(.dictating) #composer #stop { display: flex; }
+body.responding:not(.voice):not(.dictating) #composer #send,
+body.responding:not(.voice):not(.dictating) #composer #mic,
+body.responding:not(.voice):not(.dictating) #composer #dict { display: none; }
+/* Attach is not in that list: it holds the left edge, so hiding it would
+   shunt the whole box sideways every time a reply starts. It greys out
+   instead, from the same disabled state dictation uses. */
+/* Same rule in voice mode: once there is something to send, sending is the
+   only thing the box should offer. Mute and end come back when it empties. */
+#composer.typing .round       { display: none; }
+
+/* Pending images stack inside the box, above the text — they are part of
+   the message being written, so the box grows to hold them rather than
+   something separate floating over it. They sit against the box's own inset
+   rather than lining up with the text, which now starts past the attach
+   button. */
+/* Nothing on top, so the thumbnails sit the same 8px off the composer's
+   border as the button row does off the bottom. */
+#tray { display: none; gap: 8px; flex-wrap: wrap; padding: 0 0 8px; }
+#tray:not(:empty) { display: flex; }
+body.dictating #tray, body.voice #tray { display: none; }
+/* The frame carries no border and no overflow:hidden, so that top:0/right:0
+   on the close button is the OUTER corner rather than a pixel inside it —
+   absolute offsets come off the padding box, so a border on the frame would
+   push the button in by its width. Both the border and the rounding live on
+   the image, which is also what stops the corner clipping a bite out of a
+   button that deliberately sits on it. */
+.thumb { position: relative; width: 112px; height: 112px; flex: none; }
+/* Concentric with the composer: its radius less the 7px of padding the
+   thumbnail is inset by, so the two curves stay parallel instead of the
+   inner one bulging. */
+.thumb img { width: 100%; height: 100%; object-fit: cover; display: block;
+             border-radius: calc(var(--radius-box) - 7px); }
+/* Hover only, so a tray of attachments reads as pictures and not as a row of
+   controls. Plain :focus, not :focus-visible — whether the latter fires is a
+   browser heuristic about how focus arrived, and the failure mode is a
+   button you have tabbed to and cannot see. */
+.thumb button {
+  position: absolute; top: 0; right: 0; width: 13px; height: 13px;
+  border: 0; border-radius: 50%; cursor: pointer; padding: 0;
+  /* Fixed light chip, not --primary: this sits on top of someone's
+     photograph, not on a themed surface, so it must not invert with the
+     theme and leave a dark blob on a dark picture. The hairline ring is what
+     keeps it visible when the photo underneath is white. */
+  background: rgba(255,255,255,.94); color: #1f1f1f;
+  box-shadow: 0 0 0 1px rgba(0,0,0,.22);
+  /* Flex-centred like the rest, and drawing the icon font's `close` rather
+     than a text "x". Centring the box was never the problem: U+00D7 sits on
+     the maths axis, above the middle of its own line box, so the glyph rides
+     high however the box is aligned. The icon font's glyph is drawn centred
+     on its em square, which is the only way this comes out right. */
+  display: flex; align-items: center; justify-content: center;
+  opacity: 0; transition: opacity .12s;
+}
+.thumb button .gs { font-size: 10px; }
+.thumb:hover button, .thumb button:focus { opacity: 1; }
+/* Where there is no hover there is no reveal, and an attachment you cannot
+   remove is worse than one that looks slightly busy. */
+@media (hover: none) { .thumb button { opacity: 1; } }
+/* Images already sent, shown with the message that carried them. Tight to
+   the bubble beneath — a 6px gap on top of the column's own made them read
+   as two separate messages rather than one with a picture in it. */
+.msg .shots { display: flex; gap: 6px; flex-wrap: wrap; }
+.msg .shots img { max-width: 330px; max-height: 330px; border-radius: var(--radius-box); display: block; }
+.msg.user:has(.shots) { gap: 6px; }
+/* The corner where the two meet. Both are right-aligned, so easing the
+   bubble's top-right in ties it to the image above instead of leaving two
+   unrelated round things stacked up.
+ 
+   All four corners are respecified, and none of them is the 999px pill. CSS
+   scales EVERY radius on a box by one factor when any edge overflows —
+   f = min(edge / sum of its two radii) — so the left edge's 999+999 against
+   a 42px-tall bubble gives f = 0.021 and takes the 25.6px corner down to
+   half a pixel with it. Mixing a pill with a smaller corner cannot work; it
+   silently squares off the corner you were trying to shape.
+ 
+   1.25rem is about half the height of a one-line bubble, so it still reads
+   as a pill, and 20 + 11.2 fits inside 42 with no scaling at all. */
+.msg .shots + .body {
+  border-radius: 1.25rem 0.5rem 1.25rem 1.25rem;
+}
+.msg .body:empty { display: none; }
+/* Stays put while you type, unlike mic and voice: a caption for the image
+   you just attached is the normal case, so this is not part of the
+   one-affordance-at-a-time slot on the right. Dictation disables it instead
+   of hiding it — it anchors the left edge, and taking it away would shunt
+   the waveform sideways mid-recording. */
+body.voice #attach { display: none; }
+/* No vision tower on this server: the button would only lead to an error. */
+body.novision #attach { display: none; }
+
+/* ── voice overlay ────────────────────────────────────────────────── */
+/* Voice mode occupies the conversation area, not the whole window: the
+   composer stays live underneath so a thought that is easier typed than
+   spoken does not require leaving voice mode first. */
+#voice { display: none; }
+body.voice #voice {
+  display: flex; flex: 1; flex-direction: column;
+  align-items: center; justify-content: center; gap: 18px; padding: 8px 16px;
+}
+body.voice #thread { display: none; }
+/* The blank-state centring would fight the visualiser for the free space. */
+/* main must be a flex CONTAINER here, or #voice's flex:1 has nothing to
+   fill against and the visualiser hangs off the top of the area. */
+body.voice main   { flex: 1; margin-top: 0; overflow: hidden; display: flex; }
+body.voice footer { margin-bottom: 0; }
+/* Already in voice mode — the button that gets you there is noise here. */
+body.voice #mic   { display: none; }
+
+/* Wider than it is tall: the ribbon runs horizontally, so a square box
+   would be mostly empty above and below it. */
+#viz { width: min(82vw, 460px); height: min(34vw, 190px); }
+/* Nothing to show until the microphone is granted and the socket is up: a
+   ribbon breathing away over a permission prompt claims to be listening
+   when it cannot hear anything yet. Hidden rather than removed, so it fades
+   up in place instead of shoving the composer down when it arrives. */
+#viz { visibility: hidden; opacity: 0; transition: opacity .25s; }
+body.listening #viz { visibility: visible; opacity: 1; }
+/* Failures only. The ribbon already says listening / speaking / muted
+   better than a caption can, but a denied microphone or a dropped socket
+   has to be visible or it just sits there looking fine. */
+#vstate { color: var(--destructive); font-size: 13px; }
+#vstate:empty { display: none; }
+/* The composer's own version of #vstate, which lives inside the voice
+   overlay and is therefore invisible in chat — where a rejected paste or an
+   unreadable file has no button missing to explain itself. */
+#notice { max-width: 46rem; margin: 0 auto 6px; text-align: center;
+          color: var(--destructive); font-size: 13px; }
+#notice:empty { display: none; }
+
+/* Mute and end sit inside the composer, right-aligned beside the other
+   affordances, so voice mode adds controls to the box rather than building
+   a second row around it. Same 36px box as the send button. */
+/* Mute carries no chrome at rest — it is a glyph like the others in the
+   box — and only takes a fill once it is actually muting something. End
+   keeps its solid treatment because it is the destructive-ish action. */
+.round { display: none; }
+body.voice #composer:not(.typing) .round { display: flex; }
+.round:hover { background-color: var(--accent); opacity: 1; }
+.round.off { background-color: var(--destructive); color: oklch(0.985 0 0); }
+.round.off:hover { background-color: var(--destructive); opacity: .85; }
+.round.end { background-color: var(--primary); color: var(--primary-foreground); }
+.round.end:hover { background-color: var(--primary); opacity: .85; }
