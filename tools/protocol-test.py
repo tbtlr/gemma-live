@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""End-to-end check of the /v1/live wire protocol against a running gl-serve.
+"""End-to-end check of the /api/live wire protocol against a running gl-serve.
 
 The unit tests under tests/ are pure logic and never open a socket, so
 nothing else notices when an event stops being emitted, an audio frame
@@ -125,8 +125,8 @@ def types(evs):
     return [e.get("t") for e in evs]
 
 def test_live(host, port, token):
-    print("\n/v1/live")
-    s = Sock(host, port, "/v1/live", token)
+    print("\n/api/live")
+    s = Sock(host, port, "/api/live", token)
     ok("handshake upgrades", "101" in s.status, s.status)
     hello, _ = s.collect(3)
     ready = next((e for e in hello if e.get("t") == "ready"), None)
@@ -185,7 +185,7 @@ def test_live(host, port, token):
     # rather than being handed a session it cannot drive.
     print("  -- routing --")
     time.sleep(0.5)
-    o = Sock(host, port, "/v1/realtime", token)
+    o = Sock(host, port, "/v1/live", token)
     gone, _ = o.collect(3)
     ok("an unknown endpoint gets no session", not types(gone),
        ",".join(str(x) for x in types(gone)))

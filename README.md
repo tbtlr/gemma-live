@@ -201,7 +201,7 @@ What lands on disk is what reaches the speaker — trimmed, capped, and at
 anything else that can hold a socket open — drives Gemma locally.
 
 ```bash
-./build/gl-serve                       # ws://127.0.0.1:8927/v1/live
+./build/gl-serve                       # ws://127.0.0.1:8927/api/live
 ./build/gl-serve --web-port 9000 --vad-silence 350
 ```
 
@@ -354,7 +354,7 @@ a sentence or two with nothing in them that cannot be read aloud.
 
 ### The wire protocol
 
-`/v1/live` is the only endpoint on the socket, and it is shaped for this
+`/api/live` is the only endpoint on the socket, and it is shaped for this
 session rather than borrowed from anything.
 
 Audio travels as **binary WebSocket frames**, raw pcm16, in both directions.

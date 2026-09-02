@@ -859,7 +859,7 @@ async function showSpokenTurn() {
 
 function connectWs() {
   const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
-  ws = new WebSocket(proto + location.host + url('/v1/live'));
+  ws = new WebSocket(proto + location.host + url('/api/live'));
   // Reply audio arrives as bytes, not as base64 inside an event.
   ws.binaryType = 'arraybuffer';
   ws.onopen  = () => {

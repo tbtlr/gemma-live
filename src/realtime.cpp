@@ -1301,7 +1301,7 @@ int main(int argc, char ** argv) {
     if (O.verbosity > 0) {
         fprintf(stderr, "\ngl-serve ready.\n");
         fprintf(stderr, "  http://%s:%d/                 web ui\n", O.web_host.c_str(), O.web_port);
-        fprintf(stderr, "  ws://%s:%d/v1/live            voice session\n", O.web_host.c_str(), O.web_port);
+        fprintf(stderr, "  ws://%s:%d/api/live           voice session\n", O.web_host.c_str(), O.web_port);
         fprintf(stderr, "  http://%s:%d/api/chat         text chat\n", O.web_host.c_str(), O.web_port);
         if (g_stt.loaded()) {
             fprintf(stderr, "  http://%s:%d/api/transcribe   dictation\n",
@@ -1364,7 +1364,7 @@ int main(int argc, char ** argv) {
             close(fd);
             continue;
         }
-        if (req.path != "/v1/live") {
+        if (req.path != "/api/live") {
             // Upgraded, but to nothing: better a close with a reason than
             // a session speaking a protocol the client never asked for.
             ws::send_close(fd, 1008, "no such endpoint");
